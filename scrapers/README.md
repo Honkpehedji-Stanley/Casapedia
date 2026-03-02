@@ -1,16 +1,13 @@
 # Scrapers
 
-## DVF Scraper
+Modules de collecte de données immobilières et démographiques à partir de sources publiques françaises.
 
-Scraper pour les données DVF (Demande de Valeurs Foncières) - transactions immobilières publiques.
-
-### Installation
+## Installation
 
 ```bash
 pip install -r requirements.txt
+cp .env.example .env
 ```
-
-### Configuration
 
 Configurer les variables d'environnement dans `.env` :
 ```
@@ -21,79 +18,137 @@ DB_USER=postgres
 DB_PASSWORD=postgres
 ```
 
-### Utilisation
+## Scrapers disponibles
 
-#### Exemple 1 : Scraper un département avec limite (pour tester)
+### 1. Communes Scraper
 
+Récupère le référentiel des communes françaises (codes INSEE, noms, coordonnées GPS).
+
+**Source** : data.gouv.fr - Code Officiel Géographique INSEE
+
+**Usage** :
+```python
+from scrapers.communes_scraper import CommunesScraper
+
+scraper = CommunesScraper()
+scraper.run()
+```
+
+**Exécution** :
+```bash
+python scrapers/communes_scraper.py
+```
+
+**Données collectées** : ~35 000 communes avec code INSEE, nom, département, région, latitude, longitude
+
+
+### 2. DVF Scraper
+
+Récupère les transactions immobilières (Demande de Valeurs Foncières).
+
+**Source** : data.gouv.fr - DVF
+
+**Usage** :
 ```python
 from scrapers.dvf_scraper import DVFScraper
 
+# Scraper un département avec limite (test)
 scraper = DVFScraper()
 scraper.run(year=2023, department='75', limit=1000)
-```
 
-#### Exemple 2 : Scraper un département complet
-
-```python
-scraper = DVFScraper()
+# Scraper un département complet
 scraper.run(year=2023, department='75')
-```
 
-#### Exemple 3 : Scraper toute la France (attention : gros fichier)
-
-```python
-scraper = DVFScraper()
+# Scraper toute la France (attention : fichier volumineux)
 scraper.run(year=2023)
 ```
 
-### Exécution directe
+**Exécution** :
+```bash
+python scrapers/dvf_scraper.py
+```
+
+**Données collectées** : prix, surface, type de bien, nombre de pièces, adresse, date de transaction
+
+
+### 3. INSEE Scraper
+
+Récupère les données démographiques et économiques par commune.
+
+**Source** : INSEE - Données communales
+
+**Usage** :
+```python
+from scrapers.insee_scraper import INSEEScraper
+
+scraper = INSEEScraper()
+scraper.run(year=2021)
+```
+
+**Exécution** :
+```bash
+python scrapers/insee_scraper.py
+```
+
+**Données collectées** : population, revenus médians, nombre de ménages
+
+
+### 4. DPE Scraper
+
+Récupère les diagnostics de performance énergétique des logements.
+
+**Source** : ADEME - Base DPE Logements
+
+**Usage** :
+```python
+from scrapers.dpe_scraper import DPEScraper
+
+# Scraper un département avec limite (test)
+scraper = DPEScraper()
+scraper.run(department='75', limit=5000)
+
+# Scraper un département complet
+scraper.run(department='75')
+
+# Scraper toute la France (attention : fichier volumineux)
+scraper.run()
+```
+
+**Exécution** :
+```bash
+python scrapers/dpe_scraper.py
+```
+
+**Données collectées** : classe énergétique (A-G), classe GES, consommation, émissions CO2, type de bâtiment, année de construction
+
+
+## Ordre d'exécution recommandé
+
+Pour peupler la base de données, exécuter les scrapers dans cet ordre :
 
 ```bash
-cd scrapers
-python dvf_scraper.py
+# 1. Référentiel communes (requis pour les clés étrangères)
+python scrapers/communes_scraper.py
+
+# 2. Transactions immobilières
+python scrapers/dvf_scraper.py
+
+# 3. Données démographiques
+python scrapers/insee_scraper.py
+
+# 4. Diagnostics énergétiques
+python scrapers/dpe_scraper.py
 ```
 
-### Structure du code
+## Structure du code
 
-Le scraper suit une structure simple en 3 étapes :
+Chaque scraper suit une architecture en 3 étapes :
 
-1. **`download_data()`** : Télécharge le CSV depuis data.gouv.fr
-2. **`parse_csv()`** : Parse le CSV et extrait les données pertinentes
-3. **`save_to_database()`** : Insère les données dans PostgreSQL
+1. **`download_data()`** : Télécharge les données depuis la source
+2. **`parse_csv()` / `parse_data()`** : Parse et nettoie les données
+3. **`save_to_database()`** : Insère dans PostgreSQL
 
-### Adapter pour créer d'autres scrapers
-
-Pour créer un nouveau scraper, suivre ce pattern :
-
-```python
-class MonScraper:
-    def __init__(self):
-        # Configuration et chemins
-        self.data_dir = Path(__file__).parent.parent / "data" / "raw" / "mon_scraper"
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-    
-    def download_data(self):
-        # Récupérer les données (API, CSV, scraping web)
-        pass
-    
-    def parse_data(self):
-        # Parser et nettoyer les données
-        pass
-    
-    def save_to_database(self):
-        # Insérer dans PostgreSQL
-        db = get_db_connection()
-        db.insert_many('ma_table', columns, data)
-        db.disconnect()
-    
-    def run(self):
-        # Orchestrer les étapes
-        data = self.download_data()
-        parsed = self.parse_data(data)
-        self.save_to_database(parsed)
-```
-
-### Codes départements utiles
+## Codes départements utiles
 
 - 75 : Paris
 - 69 : Rhône (Lyon)
@@ -102,3 +157,13 @@ class MonScraper:
 - 33 : Gironde (Bordeaux)
 - 59 : Nord (Lille)
 - 44 : Loire-Atlantique (Nantes)
+- 06 : Alpes-Maritimes (Nice)
+- 67 : Bas-Rhin (Strasbourg)
+- 35 : Ille-et-Vilaine (Rennes)
+
+## Notes
+
+- Les scrapers utilisent uniquement des données publiques
+- Respect des APIs et rate limiting
+- Les fichiers téléchargés sont stockés dans `data/raw/{source}/`
+- Les scrapers gèrent les doublons et les erreurs de parsing
