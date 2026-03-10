@@ -70,10 +70,10 @@ class CommunesScraper:
             
             for row in reader:
                 try:
-                    code_insee = row.get('com_code', '').strip()
-                    nom = row.get('com_nom', '').strip()
-                    dept = row.get('dep_code', '').strip()
-                    region = row.get('reg_nom', '').strip()
+                    code_insee = row.get('code_commune_INSEE', '').strip()
+                    nom = row.get('nom_commune', '').strip()
+                    dept = row.get('code_departement', '').strip()
+                    region = row.get('nom_region', '').strip()
                     latitude = row.get('latitude', '').strip()
                     longitude = row.get('longitude', '').strip()
                     

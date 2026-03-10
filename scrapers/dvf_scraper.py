@@ -22,6 +22,8 @@ class DVFScraper:
     """Scraper pour les données DVF"""
     
     def __init__(self):
+        # FIXME: L'URL DVF semble avoir changé, renvoie 404
+        # TODO: Vérifier la nouvelle structure sur https://www.data.gouv.fr/fr/datasets/demandes-de-valeurs-foncieres/
         self.base_url = "https://files.data.gouv.fr/geo-dvf/latest/csv"
         self.data_dir = Path(__file__).parent.parent / "data" / "raw" / "dvf"
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -37,13 +39,14 @@ class DVFScraper:
         Returns:
             Path du fichier téléchargé
         """
-        # URL des données par année
+        # URLs corrigées - les données sont organisées différemment
         if department:
-            filename = f"{year}/departements/{department}.csv"
+            # Format: /latest/csv/departements/75.csv
+            url = f"{self.base_url}/departements/{department}.csv"
         else:
-            filename = f"{year}/full.csv"
+            # Pour toute la France
+            url = f"{self.base_url}/full.csv"
         
-        url = f"{self.base_url}/{filename}"
         local_file = self.data_dir / f"dvf_{year}_{department or 'france'}.csv"
         
         print(f"Téléchargement : {url}")
