@@ -1,0 +1,149 @@
+version: '3.8'
+
+x-airflow-common:
+  &airflow-common
+  image: apache/airflow:2.8.1
+  environment:
+    &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres-airflow/airflow
+    AIRFLOW__CORE__LOAD_DEFAULT_CONNECTIONS: 'false'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+    - ./datalake:/opt/airflow/datalake # Pour qu'Airflow puisse déclencher la validation des données brutes
+  depends_on:
+    - postgres-airflow
+
+services:
+  # ==========================================
+  # 1. BASES DE DONNÉES APP (CASAPEDIA)
+  # ==========================================
+  postgres-app:
+    image: postgres:15-alpine
+    container_name: casapedia_postgres
+    environment:
+      POSTGRES_USER: casapedia_user
+      POSTGRES_PASSWORD: casapedia_password
+      POSTGRES_DB: casapedia_db
+    ports:
+      - "5433:5432" # Port 5433 sur l'hôte pour éviter les conflits
+    volumes:
+      - pgdata_app:/var/lib/postgresql/data
+    networks:
+      - casapedia_network
+
+  mongodb:
+    image: mongo:6.0
+    container_name: casapedia_mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: examplepassword
+    ports:
+      - "27017:27017" # Port MongoDB standard
+    volumes:
+      - mongodata:/data/db
+    networks:
+      - casapedia_network
+
+  # ==========================================
+  # 2. CLUSTER BIG DATA (APACHE SPARK)
+  # ==========================================
+  spark-master:
+    image: bitnami/spark:3.4.1
+    container_name: casapedia_spark_master
+    environment:
+      - SPARK_MODE=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+    ports:
+      - "8080:8080" # Interface Web Spark Master
+      - "7077:7077" # Port de soumission des jobs cluster
+    volumes:
+      - ./datalake:/opt/bitnami/spark/datalake
+    networks:
+      - casapedia_network
+
+  spark-worker:
+    image: bitnami/spark:3.4.1
+    container_name: casapedia_spark_worker
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=2G
+      - SPARK_WORKER_CORES=2
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+    ports:
+      - "8081:8081" # Interface Web Worker
+    volumes:
+      - ./datalake:/opt/bitnami/spark/datalake
+    depends_on:
+      - spark-master
+    networks:
+      - casapedia_network
+
+  # ==========================================
+  # 3. ORCHESTRATEUR (APACHE AIRFLOW)
+  # ==========================================
+  postgres-airflow:
+    image: postgres:15-alpine
+    container_name: casapedia_airflow_db
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - pgdata_airflow:/var/lib/postgresql/data
+    networks:
+      - casapedia_network
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: casapedia_airflow_init
+    command: version
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: admin # Mdp par défaut pour l'UI
+    networks:
+      - casapedia_network
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: casapedia_airflow_web
+    command: webserver
+    ports:
+      - "8082:8080" # L'UI Airflow sera sur le port 8082
+    depends_on:
+      - postgres-airflow
+      - airflow-init
+    networks:
+      - casapedia_network
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: casapedia_airflow_scheduler
+    command: scheduler
+    depends_on:
+      - postgres-airflow
+      - airflow-init
+    networks:
+      - casapedia_network
+
+volumes:
+  pgdata_app:
+  mongodata:
+  pgdata_airflow:
+
+networks:
+  casapedia_network:
+    driver: bridge
