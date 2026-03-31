@@ -19,40 +19,62 @@ Afin d'absorber la charge des Giga-octets d'informations (transactions, recensem
 
 ```mermaid
 flowchart TD
-    %% Airflow agit à tous les niveaux du DAG (Directed Acyclic Graph)
-    subgraph Apache Airflow - Orchestration Centrale (DAGs)
-        T1[Task 1: Sensor/Scraping API DVF & INSEE] 
-        T2[Task 2: Scraping Non-structuré Avis]
-        T3[Task 3: PySpark Job - Data Cleaning & Join]
-        T4[Task 4: PySpark Job - NLP & Machine Learning]
-        T5[Task 5: Data Quality Gate]
-        T6[Task 6: Bulk Load to PostgreSQL]
-        T7[Task 7: Bulk Load to MongoDB]
+    subgraph S1[1. Ingestion & Collecte]
+        A["Scrapers Python \n(Async Streams)"]
+        B["APIs Gouvernementales \n(DVF, INSEE)"]
+        C["Web Scraping\n(Avis & Textes)"]
+        B --> A
+        C --> A
+    end
+
+    subgraph S2[2. Data Lake local]
+        DL_RAW[("Datalake: RAW\n(CSV, ZIP, JSON)")]
+        A == "Dump brut" ==> DL_RAW
+    end
+
+    subgraph S3[3. Orchestration Globale]
+        AF[["Apache Airflow\n(Planificateur & DAGs)"]]
+    end
+
+    subgraph S4[4. Traitement Big Data Distribué]
+        SP_M{"Cluster Apache Spark\n(Master / Workers)"}
+        P1["PySpark: Nettoyage\n& FillNA massifs"]
+        P2["Spark MLlib: \nPrédiction Prix (Regression)"]
+        P3["Spark NLP: Analyse\nde Sentiment (Avis)"]
+        DL_PRO[("Datalake: PROCESSED\n(Parquet / Delta)")]
         
-        T1 --> T3
-        T2 --> T4
-        T3 --> T5
-        T4 --> T5
-        T5 --> T6
-        T5 --> T7
+        DL_RAW -->|Lecture Distribuée| SP_M
+        SP_M --> P1
+        SP_M --> P2
+        SP_M --> P3
+        P1 --> DL_PRO
+        P2 --> DL_PRO
+        P3 --> DL_PRO
     end
+
+    subgraph S5[5. Bases de données Polyglottes]
+        PG[("PostgreSQL\n(Données Tabulaires & Geo)")]
+        MG[("MongoDB\n(Données Textuelles & Documents)")]
+        DL_PRO -->|Bulk SQL| PG
+        DL_PRO -->|Insert Many| MG
+    end
+
+    subgraph S6[6. DataViz & Interface UI]
+        ST["Streamlit App\n(Dashboarding)"]
+        MB["MapBox / Folium\n(Cartes interactives)"]
+        PG --> ST
+        MG --> ST
+        ST --> MB
+    end
+
+    %% Les liens de contrôle d'Airflow (en pointillés rouges)
+    AF -. "Contrôle & Déclenche" .-> A
+    AF -. "Contrôle & Déclenche" .-> SP_M
+    AF -. "Contrôle Data Quality" .-> DL_PRO
     
-    subgraph 1. Data Lake (Stockage Fichiers)
-        DL1[(datalake/raw/)]
-        DL2[(datalake/processed/)]
-        T1 -.->|Dump raw CSV/ZIP| DL1
-        T2 -.->|Dump raw JSON| DL1
-        DL1 -.->|Read| T3
-        T4 -.->|Write Parquet/Delta| DL2
-        T3 -.->|Write Parquet/Delta| DL2
-    end
-    
-    subgraph 2. Bases de données (Polyglotte)
-        PG[(PostgreSQL - SQL \nDonnées Tabulaires)]
-        MG[(MongoDB - NoSQL \nDonnées Documents)]
-        T6 -.->|COPY rapide| PG
-        T7 -.->|Insert Many| MG
-    end
+    style AF fill:#e8f4f8,stroke:#017e84,stroke-width:2px,color:#000
+    style SP_M fill:#fff3e0,stroke:#e67e22,stroke-width:2px,color:#000
+    style ST fill:#ffebe6,stroke:#ff4b4b,stroke-width:2px,color:#000
 ```
 
 ### Le Rôle d'Apache Airflow (L'orchestrateur)
@@ -70,19 +92,23 @@ Airflow remplace et transcende le système de scripts Bash (`run_pipeline.sh`). 
    - **MongoDB** : Pour l'analyse documentaire (commentaires sur les villes, nuages de mots scalables).
 - **Data Viz UI** : Dashboard Streamlit connecté via Pydeck / Leaflet / MapBox.
 
-## 2.2 Architecture de visualisation
+## 2.2 Architecture de visualisation & Interface
+
+L'accès final pour l'utilisateur se basera sur les résultats de notre traitement lourd, en ne requêtant que les données nécessaires.
 
 ```mermaid
 flowchart TD
-    A[Base PostgreSQL] --> B[API/Query Layer]
-    B --> C[Dashboard global]
-    B --> D[Carte interactive]
-    B --> E[Comparateur territorial]
-    B --> F[Fiche territoire]
-    C --> G[KPI nationaux]
-    D --> H[Choroplèthe / Heatmap / Bulles]
-    E --> I[Comparaisons multi-zones]
-    F --> J[Détails localisés + tendances]
+    %% Bases de données nettoyées et enrichies
+    A1[(PostgreSQL\nSpatial & Tabulaire)] --> B[Data Access Layer\n(pandas / sqlalchemy)]
+    A2[(MongoDB\nIndex Textuel NLP)] --> B
+
+    B --> ST[[Application Streamlit]]
+    
+    ST --> D[Global & KPIs\n(PySpark Analytics)]
+    ST --> E[Cartographie Avancée\n(MapBox / Pydeck / Leaflet)]
+    ST --> F[Exploration NLP\n(WordClouds d'avis citadins)]
+    
+    style ST fill:#ffebe6,stroke:#ff4b4b,stroke-width:2px,color:#000
 ```
 
 ### Principes UX

@@ -16,8 +16,7 @@ default_args = {
 
 def download_file(url, dest_folder, filename):
     """
-    Fonction ELT : Téléchargement 'Dumb' (bête et méchant).
-    On télécharge les fichiers bruts MASSIVEMENT sans les ouvrir ni les parser.
+    Fonction ELT : Téléchargement 'Dumb'.
     """
     # Dans Docker, le datalake est monté sur /opt/airflow/datalake
     base_path = f"/opt/airflow/datalake/raw/{dest_folder}"
