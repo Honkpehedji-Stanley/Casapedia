@@ -99,14 +99,14 @@ L'accès final pour l'utilisateur se basera sur les résultats de notre traiteme
 ```mermaid
 flowchart TD
     %% Bases de données nettoyées et enrichies
-    A1[(PostgreSQL\nSpatial & Tabulaire)] --> B[Data Access Layer\n(pandas / sqlalchemy)]
-    A2[(MongoDB\nIndex Textuel NLP)] --> B
+    A1[("PostgreSQL\nSpatial & Tabulaire")] --> B["Data Access Layer\n(pandas / sqlalchemy)"]
+    A2[("MongoDB\nIndex Textuel NLP")] --> B
 
-    B --> ST[[Application Streamlit]]
+    B --> ST{{"Application Streamlit"}}
     
-    ST --> D[Global & KPIs\n(PySpark Analytics)]
-    ST --> E[Cartographie Avancée\n(MapBox / Pydeck / Leaflet)]
-    ST --> F[Exploration NLP\n(WordClouds d'avis citadins)]
+    ST --> D["Global & KPIs\n(PySpark Analytics)"]
+    ST --> E["Cartographie Avancée\n(MapBox / Pydeck / Leaflet)"]
+    ST --> F["Exploration NLP\n(WordClouds d'avis citadins)"]
     
     style ST fill:#ffebe6,stroke:#ff4b4b,stroke-width:2px,color:#000
 ```
