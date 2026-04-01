@@ -132,7 +132,7 @@ flowchart TD
 
 ### Note importante
 
-- Les scrapers utilisent des **sources publiques** qui génèrent des Giga-octets d'informations.
+- Les DAGs d'ingestion utilisent des **sources publiques** qui génèrent des Giga-octets d'informations.
 - La collecte se sépare radicalement du traitement pour ne pas créer de goulots d'étranglement (Datalake first).
 
 ---
