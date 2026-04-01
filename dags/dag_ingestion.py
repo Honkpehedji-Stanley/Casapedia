@@ -72,12 +72,24 @@ with DAG(
         task_id='download_dvf',
         python_callable=download_file,
         op_kwargs={
-            'url': 'https://www.data.gouv.fr/fr/datasets/r/817204ac-2202-4b4a-98e7-418c1114b8ea', 
+            'url': 'https://files.data.gouv.fr/geo-dvf/latest/csv/2023/full.csv.gz', 
             'dest_folder': 'dvf',
-            'filename': 'transactions_dvf_brut.csv'
+            'filename': 'transactions_dvf_brut.csv.gz'
+        }
+    )
+
+    # Tâche 4 : Ingestion DPE (Diagnostics de performance énergétique - Échantillon ADEME)
+    ingest_dpe = PythonOperator(
+        task_id='download_dpe',
+        python_callable=download_file,
+        op_kwargs={
+            'url': 'https://data.ademe.fr/data-fair/api/v1/datasets/dpe-v2-logements-existants/lines?size=100000&format=csv',
+            'dest_folder': 'dpe',
+            'filename': 'dpe_logements_brut.csv'
         }
     )
 
     # Le Graphe d'exécution (Flow).
-    # Ici, nous disons à Airflow de lancer les 3 téléchargements en PARALLÈLE, pas l'un après l'autre.
+    # Ici, nous disons à Airflow de lancer les 4 téléchargements en PARALLÈLE, pas l'un après l'autre.
+    [ingest_communes, ingest_insee, ingest_dvf, ingest_dpe]
     [ingest_communes, ingest_insee, ingest_dvf]
