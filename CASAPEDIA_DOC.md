@@ -20,9 +20,9 @@ Afin d'absorber la charge des Giga-octets d'informations (transactions, recensem
 ```mermaid
 flowchart TD
     subgraph S1[1. Ingestion & Collecte]
-        A["Scrapers Python \n(Async Streams)"]
-        B["APIs Gouvernementales \n(DVF, INSEE)"]
-        C["Web Scraping\n(Avis & Textes)"]
+        A["Apache Airflow \n(PythonOperators \n& Requests)"]
+        B["APIs Gouvernementales \n(DVF, INSEE, ADEME)"]
+        C["Web Scraping / APIs\n(Avis & Textes)"]
         B --> A
         C --> A
     end
@@ -85,7 +85,7 @@ Airflow remplace et transcende le système de scripts Bash (`run_pipeline.sh`). 
 
 ### Composants Technologiques
 
-- **Ingestion "Dumb"** : Modèle ELT (Extract, Load, Transform). Les scrapers téléchargent juste les fichiers bruts asynchrone (Requests stream) vers `datalake/raw/...` sans essayer d'insérer dans la BDD.
+- **Ingestion "Dumb"** : Modèle ELT (Extract, Load, Transform). Les DAGs Airflow téléchargent directement les gros fichiers bruts asynchrone (Requests stream) vers `datalake/raw/...` sans essayer d'insérer dans la BDD.
 - **Processing Distribué** : L'outil **Apache Spark (PySpark)** traite les énormes chunks en mémoire distribuée (via des DataFrames Spark parcellisés), réduisant par 100 le temps de transformation par rapport à pandas/for-loops.
 - **Stockage Hybride / Polyglotte** : 
    - **PostgreSQL** : Pour le relationnel à faible latence visuelle (prix au m², taille, infos géographiques).
@@ -355,10 +355,6 @@ Casapedia/
 ├── database/
 │   ├── mongo_manager.py      # Connecteur pour la base de données NoSQL
 │   └── pg_manager.py         # Connecteur pour PostgreSQL
-├── scrapers/
-│   ├── dvf_download.py       # Extractions directes => Datalake
-│   ├── reviews_scraper.py    # Scraping textuel non structuré (JSON)
-│   └── ...
 ├── spark_jobs/               # Le Cœur du Traitement Haute Performance
 │   ├── clean_tabulaires.py   # Script PySpark pour le FillNA et Map-Reduce global
 │   ├── sentiment_analysis.py # Script Spark NLP Machine Learning textuel
@@ -391,7 +387,7 @@ Casapedia/
 
 ## 10) Recommandations opérationnelles (Stratégie d'évolution)
 
-1. **Abandonner l'insertion ligne-par-ligne** dans les scrapers : Ils doivent juste "Dumper" les Data Sets dans le `datalake/raw`.
+1. **Abandonner l'insertion ligne-par-ligne** : Les DAGs Airflow se contentent de "Dumper" tous les Data Sets bruts dans le `datalake/raw`.
 2. **Setup du Cluster Spark** : Utiliser le `docker-compose.yml` déjà préparé pour lancer le worker Spark. Écrire le premier job PySpark.
 3. **Introduction d'Apache Airflow** : L'utiliser pour manager des pipelines ETL dignes d'un contexte de production, plutôt qu'un bash `run_pipeline.sh`.
 4. **Scraping Textuel (NLP)** : Coder un extracteur d'avis web pour nourrir la base de données orientée documents (MongoDB).
