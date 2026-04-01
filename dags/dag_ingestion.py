@@ -83,7 +83,7 @@ with DAG(
         task_id='download_dpe',
         python_callable=download_file,
         op_kwargs={
-            'url': 'https://data.ademe.fr/data-fair/api/v1/datasets/dpe-v2-logements-existants/lines?size=100000&format=csv',
+            'url': 'https://data.ademe.fr/data-fair/api/v1/datasets/dpe03existant/lines?size=100000&format=csv',
             'dest_folder': 'dpe',
             'filename': 'dpe_logements_brut.csv'
         }
