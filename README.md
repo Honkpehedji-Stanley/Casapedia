@@ -60,11 +60,11 @@ Le projet couvre l'ensemble du territoire français métropolitain et propose un
 - PostgreSQL : données structurées (transactions, démographie, communes)
 - MongoDB : données non-structurées (optionnel, pour analyses textuelles)
 
-**Backend - Collecte et traitement**
+**Backend & Orchestration**
+- Apache Airflow (Orchestration des DAGs)
+- Apache Spark / PySpark (Traitement distribué)
 - Python 3.8+
-- Scrapers : requests, BeautifulSoup
-- Data processing : Pandas, NumPy
-- Base de données : psycopg2
+- Base de données : psycopg2, pymongo
 
 **Frontend - Visualisation** (à venir)
 - Streamlit : application interactive
@@ -73,35 +73,29 @@ Le projet couvre l'ensemble du territoire français métropolitain et propose un
 - WordCloud : nuages de mots
 
 **Machine Learning** (à venir)
-- Scikit-learn : analyses statistiques
-- spaCy : traitement du langage naturel (français)
-- TextBlob/NLTK : analyse de sentiment
+- Spark MLlib : prédictions et régressions distribuées
+- Spark NLP : traitement du langage naturel distribué
+- Scikit-learn : analyses statistiques standards
 
 ### Structure du projet
 
-```
+```text
 Casapedia/
-├── data/                    # Données (git-ignored)
-│   ├── raw/                 # Données brutes téléchargées
-│   ├── processed/           # Données nettoyées
-│   └── cache/               # Cache temporaire
-│
-├── database/                # Gestion base de données
-│   ├── init_tables.sql      # Schéma PostgreSQL
-│   ├── db_manager.py        # Gestionnaire de connexion
-│   └── __init__.py
-│
-├── scrapers/                # Collecte de données
-│   ├── communes_scraper.py  # Référentiel communes
-│   ├── dvf_scraper.py       # Transactions immobilières
-│   ├── insee_scraper.py     # Données démographiques
-│   ├── dpe_scraper.py       # Diagnostics énergétiques
-│   └── README.md            # Documentation scrapers
-│
-├── .env                     # Configuration (git-ignored)
-├── .env.example             # Template de configuration
-├── requirements.txt         # Dépendances Python
-└── README.md
+├── dags/                    # Graphes Airflow (Pipelines d'ingestion/processing)
+│   ├── dag_ingestion.py     # Extraction asynchrone des APIs vers Datalake
+│   └── ...
+├── datalake/                # Lac de données local
+│   ├── raw/                 # Données brutes téléchargées (CSV, ZIP, JSON)
+│   └── processed/           # Données nettoyées (Parquet/Delta) par Spark
+├── database/                # Connecteurs aux bases
+│   ├── pg_manager.py        # Gestionnaire PostgreSQL
+│   └── mongo_manager.py     # Gestionnaire MongoDB
+├── spark_jobs/              # Scripts de transformation Big Data
+│   └── clean_tabulaires.py  # (en construction)
+├── frontend_app/            # Interface Streamlit (à venir)
+├── docker-compose.yml       # Infrastructure (Airflow, Spark, Postgres, Mongo)
+├── .env                     # Configuration environnement
+└── requirements.txt         # Dépendances Python
 ```
 
 ### Schéma de la base de données
@@ -154,125 +148,32 @@ infrastructure
 - `v_prix_median_communes` : prix médians par commune
 - `v_dpe_stats_communes` : statistiques énergétiques par commune
 
-## Installation
+## Installation & Démarrage (Docker)
 
-### Prérequis
-
-- Python 3.8+
-- PostgreSQL 12+
-- pip ou poetry
-
-### Étapes d'installation
+Le projet tourne entièrement via Docker pour garantir la scalabilité (Airflow + Spark + BDDs).
 
 **1. Cloner le dépôt**
-
 ```bash
 git clone https://github.com/Honkpehedji-Stanley/Casapedia.git
 cd Casapedia
 ```
 
-**2. Créer un environnement virtuel**
-
+**2. Lancer l'infrastructure Big Data**
 ```bash
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# ou
-venv\Scripts\activate     # Windows
+docker-compose up -d
 ```
+Cela démarrera :
+- **Airflow Webserver & Scheduler** (Port 8080)
+- **PostgreSQL** (Port 5432)
+- **MongoDB** (Port 27017)
+- **Spark Master & Worker** (Port 8081 / 8082)
 
-**3. Installer les dépendances**
+**3. Lancer les DAGs (Collecte)**
+Toute la collecte est automatisée en approche ELT (Extract, Load, Transform). Allez sur `http://localhost:8080` (identifiants par défaut selon *docker-compose*), activez le DAG `1_ingestion_raw_data` et lancez-le. Il téléchargera massivement les données dans `datalake/raw/`.
 
-```bash
-pip install -r requirements.txt
-```
+**4. Documentation détaillée**
+Pour comprendre l'architecture Big Data complète, veuillez vous référer au fichier détaillé `CASAPEDIA_DOC.md`.
 
-**4. Configurer PostgreSQL**
-
-```bash
-# Se connecter à PostgreSQL
-sudo -u postgres psql
-
-# Créer la base de données
-CREATE DATABASE casapedia_db;
-
-# Quitter psql
-\q
-```
-
-**5. Initialiser les tables**
-
-```bash
-psql -h localhost -U postgres -d casapedia_db -f database/init_tables.sql
-```
-
-**6. Configurer les variables d'environnement**
-
-```bash
-cp .env.example .env
-# Éditer .env avec vos paramètres de connexion
-```
-
-Exemple `.env` :
-```
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=casapedia_db
-DB_USER=postgres
-DB_PASSWORD=postgres
-```
-
-## Utilisation
-
-### 1. Collecter les données
-
-**Ordre d'exécution recommandé** :
-
-```bash
-# 1. Référentiel communes (requis en premier)
-python scrapers/communes_scraper.py
-
-# 2. Transactions immobilières (DVF)
-python scrapers/dvf_scraper.py
-
-# 3. Données démographiques INSEE
-python scrapers/insee_scraper.py
-
-# 4. Diagnostics énergétiques
-python scrapers/dpe_scraper.py
-```
-
-**Exemples d'utilisation** :
-
-```python
-# Scraper un département spécifique (ex: Paris)
-from scrapers.dvf_scraper import DVFScraper
-
-scraper = DVFScraper()
-scraper.run(year=2023, department='75', limit=1000)
-```
-
-Voir [scrapers/README.md](scrapers/README.md) pour la documentation complète.
-
-### 2. Vérifier les données
-
-```bash
-# Se connecter à la base de données
-psql -h localhost -U postgres -d casapedia_db
-
-# Compter les communes
-SELECT COUNT(*) FROM communes;
-
-# Compter les transactions
-SELECT COUNT(*) FROM transactions;
-
-# Statistiques par département
-SELECT dept, COUNT(*) as nb_transactions, AVG(prix) as prix_moyen
-FROM transactions t
-JOIN communes c ON t.commune_id = c.code_insee
-GROUP BY dept
-ORDER BY nb_transactions DESC
-LIMIT 10;
-```
 
 ## Sources de données
 
