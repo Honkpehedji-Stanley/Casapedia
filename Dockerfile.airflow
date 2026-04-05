@@ -1,0 +1,11 @@
+FROM apache/airflow:2.8.1
+
+USER root
+# Installation de Java (requis pour spark-submit)
+RUN apt-get update && \
+    apt-get install -y default-jre-headless && \
+    apt-get clean
+
+USER airflow
+# Installation du provider Spark pour Airflow et de pyspark
+RUN pip install --no-cache-dir apache-airflow-providers-apache-spark pyspark==3.5.0 pandas

@@ -2,7 +2,9 @@ version: '3.8'
 
 x-airflow-common:
   &airflow-common
-  image: apache/airflow:2.8.1
+  build:
+    context: .
+    dockerfile: Dockerfile.airflow
   environment:
     &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
@@ -14,6 +16,7 @@ x-airflow-common:
     - ./logs:/opt/airflow/logs
     - ./plugins:/opt/airflow/plugins
     - ./datalake:/opt/airflow/datalake # Pour qu'Airflow puisse déclencher la validation des données brutes
+    - ./spark_jobs:/opt/airflow/spark_jobs # Partage des scripts Spark
   depends_on:
     - postgres-airflow
 
@@ -64,7 +67,8 @@ services:
       - "8080:8080" # Interface Web Spark Master
       - "7077:7077" # Port de soumission des jobs cluster
     volumes:
-      - ./datalake:/opt/bitnami/spark/datalake
+      - ./datalake:/opt/airflow/datalake
+      - ./spark_jobs:/opt/airflow/spark_jobs
     networks:
       - casapedia_network
 
@@ -83,7 +87,8 @@ services:
     ports:
       - "8081:8081" # Interface Web Worker
     volumes:
-      - ./datalake:/opt/bitnami/spark/datalake
+      - ./datalake:/opt/airflow/datalake
+      - ./spark_jobs:/opt/airflow/spark_jobs
     depends_on:
       - spark-master
     networks:

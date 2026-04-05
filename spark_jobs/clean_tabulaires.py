@@ -3,12 +3,12 @@ import zipfile
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, concat, lit
 
-# Chemins
-RAW_DIR = "/opt/bitnami/spark/datalake/raw" if os.environ.get("SPARK_HOME") else "datalake/raw"
-PROCESSED_DIR = "/opt/bitnami/spark/datalake/processed" if os.environ.get("SPARK_HOME") else "datalake/processed"
+# Chemins unifiés pour Docker
+RAW_DIR = "/opt/airflow/datalake/raw"
+PROCESSED_DIR = "/opt/airflow/datalake/processed"
 
 def main():
-    print("🚀 Initialisation de SparkSession...")
+    print("Initialisation de SparkSession...")
     spark = SparkSession.builder \
         .appName("Casapedia_Clean_Tabulaires") \
         .config("spark.sql.legacy.timeParserPolicy", "LEGACY") \
@@ -16,7 +16,7 @@ def main():
         .getOrCreate()
     
     # 1. Traitement COMMUNES
-    print("🔄 Traitement de communes.csv...")
+    print("Traitement de communes.csv...")
     df_communes = spark.read.csv(f"{RAW_DIR}/communes/communes.csv", header=True, sep=",")
     df_communes_clean = df_communes.select(
         col("code_commune_INSEE").alias("code_insee"),
@@ -31,7 +31,7 @@ def main():
     df_communes_clean.write.mode("overwrite").parquet(f"{PROCESSED_DIR}/communes")
     
     # 2. Traitement DVF (Valeurs Foncières)
-    print("🔄 Traitement de transactions_dvf_brut.csv.gz...")
+    print("Traitement de transactions_dvf_brut.csv.gz...")
     df_dvf = spark.read.csv(f"{RAW_DIR}/dvf/transactions_dvf_brut.csv.gz", header=True, sep=",")
     df_dvf_clean = df_dvf.select(
         col("id_mutation").alias("id"),
@@ -50,7 +50,7 @@ def main():
     df_dvf_clean.write.mode("overwrite").parquet(f"{PROCESSED_DIR}/transactions")
     
     # 3. Traitement DPE (Diagnostics Energétiques)
-    print("🔄 Traitement de dpe_logements_brut.csv...")
+    print("Traitement de dpe_logements_brut.csv...")
     # MultiLine=True et escape='"' sont importants car le fichier DPE contient beaucoup de textes complexes
     df_dpe = spark.read.csv(f"{RAW_DIR}/dpe/dpe_logements_brut.csv", header=True, sep=",", multiLine=True, escape='"')
     df_dpe_clean = df_dpe.select(
@@ -69,7 +69,7 @@ def main():
     df_dpe_clean.write.mode("overwrite").parquet(f"{PROCESSED_DIR}/dpe")
     
     # 4. Traitement Démographie (INSEE)
-    print("🔄 Traitement de demographie_insee.zip (extraction préalable)...")
+    print("Traitement de demographie_insee.zip (extraction préalable)...")
     zip_path = f"{RAW_DIR}/insee/demographie_insee.zip"
     tmp_csv_path = "/tmp/donnees_communes.csv"
     
@@ -86,9 +86,9 @@ def main():
         
         df_insee_clean.write.mode("overwrite").parquet(f"{PROCESSED_DIR}/demographics")
     else:
-        print("⚠️ Fichier INSEE introuvable, ingestion passée.")
+        print("Fichier INSEE introuvable, ingestion passée.")
         
-    print("✅ Traitement Big Data PySpark terminé avec succès !")
+    print("Traitement Big Data PySpark terminé avec succès !")
     spark.stop()
 
 if __name__ == "__main__":
