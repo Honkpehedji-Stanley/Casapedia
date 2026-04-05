@@ -8,10 +8,10 @@ import os
 default_args = {
     'owner': 'casapedia',
     'depends_on_past': False,
-    'email_on_failure': False, # Plus tard, on peut brancher des alertes Slack/Email ici
+    'email_on_failure': False,
     'email_on_retry': False,
-    'retries': 3,               # Tolérance aux pannes : retente 3 fois si l'API de l'Etat crash
-    'retry_delay': timedelta(minutes=5), # Attend 5 min entre chaque essai
+    'retries': 3,              
+    'retry_delay': timedelta(minutes=5),
 }
 
 def download_file(url, dest_folder, filename):
@@ -25,7 +25,6 @@ def download_file(url, dest_folder, filename):
     
     print(f"Début du téléchargement : {url}")
     
-    # stream=True est indispensable en Big Data pour ne pas faire exploser la RAM
     with requests.get(url, stream=True) as r:
         r.raise_for_status() # Lève une exception (et déclenche un Retry Airflow) si erreur 404/500
         with open(file_path, 'wb') as f:
@@ -39,8 +38,8 @@ with DAG(
     '1_ingestion_raw_data',
     default_args=default_args,
     description='Téléchargement asynchrone des sources publiques vers le Datalake',
-    schedule_interval=timedelta(days=30), # Exécution planifiée automatique chaque mois !
-    start_date=datetime(2024, 1, 1),
+    schedule_interval=timedelta(days=30), 
+    start_date=datetime(2026, 4, 3),
     catchup=False,
     tags=['casapedia', 'ingestion', 'datalake', 'raw'],
 ) as dag:
@@ -89,7 +88,5 @@ with DAG(
         }
     )
 
-    # Le Graphe d'exécution (Flow).
-    # Ici, nous disons à Airflow de lancer les 4 téléchargements en PARALLÈLE, pas l'un après l'autre.
+    # Les 4 téléchargements en PARALLÈLE, pas l'un après l'autre.
     [ingest_communes, ingest_insee, ingest_dvf, ingest_dpe]
-    [ingest_communes, ingest_insee, ingest_dvf]
