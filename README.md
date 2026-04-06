@@ -152,28 +152,38 @@ infrastructure
 
 Le projet tourne entièrement via Docker pour garantir la scalabilité (Airflow + Spark + BDDs).
 
-**1. Cloner le dépôt**
+**1. Cloner le dépôt et préparer l'environnement**
 ```bash
 git clone https://github.com/Honkpehedji-Stanley/Casapedia.git
 cd Casapedia
 ```
 
-**2. Lancer l'infrastructure Big Data**
+**2. Lancer l'infrastructure Big Data (Airflow avec PySpark intégré)**
 ```bash
-docker-compose up -d
+docker-compose up -d --build
 ```
-Cela démarrera :
-- **Airflow Webserver & Scheduler** (Port 8080)
-- **PostgreSQL** (Port 5432)
-- **MongoDB** (Port 27017)
-- **Spark Master & Worker** (Port 8081 / 8082)
+Cela démarrera et configurera :
+- **Airflow Webserver** : Port 8082 *(`admin` / `admin`)*
+- **Spark Master UI** : Port 8080
+- **Spark Worker UI** : Port 8081
+- **PostgreSQL** : Port 5433 (hôte)
+- **MongoDB** : Port 27017
 
-**3. Lancer les DAGs (Collecte)**
-Toute la collecte est automatisée en approche ELT (Extract, Load, Transform). Allez sur `http://localhost:8080` (identifiants par défaut selon *docker-compose*), activez le DAG `1_ingestion_raw_data` et lancez-le. Il téléchargera massivement les données dans `datalake/raw/`.
+**3. Activer la connexion Spark dans Airflow**
+Pour que l'orchestrateur puisse soumettre des jobs au cluster Spark, ajoutez une connexion :
+1. Sur l'interface d'Airflow (`http://localhost:8082`), allez dans **Admin** -> **Connections** puis cliquez sur **+**.
+2. Remplissez :
+   - **Connection Id** : `spark_default`
+   - **Connection Type** : `Spark`
+   - **Host** : `spark://casapedia_spark_master:7077`
+3. Sauvegardez.
 
-**4. Documentation détaillée**
+**4. Lancer les DAGs ELT (Collecte & Transformation)**
+1. **Activer le DAG `1_ingestion_raw_data`** : Télécharge les fichiers bruts dans le dossier partagé `datalake/raw/`.
+2. **Activer le DAG `2_transform_spark_data`** : Lisse les données et soumet le job `clean_tabulaires.py` au cluster Spark. Génère les formats consolidés compressés (Parquet) dans `datalake/processed/`.
+
+**5. Documentation détaillée**
 Pour comprendre l'architecture Big Data complète, veuillez vous référer au fichier détaillé `CASAPEDIA_DOC.md`.
-
 
 ## Sources de données
 
