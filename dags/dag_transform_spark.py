@@ -9,7 +9,6 @@ default_args = {
     'retry_delay': timedelta(minutes=5),
 }
 
-# Définition du Workflow (DAG) 2
 with DAG(
     '2_transform_spark_data',
     default_args=default_args,
@@ -25,7 +24,7 @@ with DAG(
         task_id='clean_tabulaires_job',
         # Emplacement du script dans les 2 conteneurs (Airflow & Spark)
         application='/opt/airflow/spark_jobs/clean_tabulaires.py',
-        # L'ID de connexion sera créé automatiquement/manuellement (spark://casapedia_spark_master:7077)
+        # ID automatique/manuelle
         conn_id='spark_default',
         name='Airflow_PySpark_Job',
         executor_cores=1,

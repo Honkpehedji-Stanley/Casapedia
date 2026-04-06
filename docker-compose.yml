@@ -2,6 +2,7 @@ version: '3.8'
 
 x-airflow-common:
   &airflow-common
+  image: casapedia-airflow:latest
   build:
     context: .
     dockerfile: Dockerfile.airflow

@@ -175,7 +175,7 @@ Pour que l'orchestrateur puisse soumettre des jobs au cluster Spark, ajoutez une
 2. Remplissez :
    - **Connection Id** : `spark_default`
    - **Connection Type** : `Spark`
-   - **Host** : `spark://casapedia_spark_master:7077`
+   - **Host** : `spark://spark-master:7077`
 3. Sauvegardez.
 
 **4. Lancer les DAGs ELT (Collecte & Transformation)**
