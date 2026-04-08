@@ -31,6 +31,10 @@ with DAG(
         executor_memory='1g',
         driver_memory='1g',
         verbose=True,
+        conf={
+            'spark.driver.host': 'casapedia_airflow_scheduler',
+            'spark.driver.bindAddress': '0.0.0.0'
+        }
     )
 
     clean_data_spark
