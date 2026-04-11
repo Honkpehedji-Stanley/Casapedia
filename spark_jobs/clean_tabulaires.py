@@ -1,11 +1,23 @@
 import os
 import zipfile
+import shutil
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, concat, lit
 
 # Chemins unifiés pour Docker
 RAW_DIR = "/opt/airflow/datalake/raw"
 PROCESSED_DIR = "/opt/airflow/datalake/processed"
+
+
+def prepare_output_path(path):
+    if os.path.exists(path):
+        shutil.rmtree(path)
+    previous_umask = os.umask(0)
+    try:
+        os.makedirs(path, mode=0o777, exist_ok=True)
+        os.chmod(path, 0o777)
+    finally:
+        os.umask(previous_umask)
 
 def main():
     print("Initialisation de SparkSession...")
@@ -14,6 +26,12 @@ def main():
         .config("spark.sql.legacy.timeParserPolicy", "LEGACY") \
         .config("spark.driver.memory", "4g") \
         .getOrCreate()
+
+    previous_umask = os.umask(0)
+    try:
+        os.makedirs(PROCESSED_DIR, mode=0o777, exist_ok=True)
+    finally:
+        os.umask(previous_umask)
     
     # 1. Traitement COMMUNES
     print("Traitement de communes.csv...")
@@ -28,6 +46,7 @@ def main():
         col("nom_region")
     ).dropDuplicates(["code_insee"])
     
+    prepare_output_path(f"{PROCESSED_DIR}/communes")
     df_communes_clean.write.mode("overwrite").parquet(f"{PROCESSED_DIR}/communes")
     
     # 2. Traitement DVF (Valeurs Foncières)
@@ -47,6 +66,7 @@ def main():
      .filter(col("surface") > 0) \
      .withColumn("prix_m2", col("prix") / col("surface"))
     
+    prepare_output_path(f"{PROCESSED_DIR}/transactions")
     df_dvf_clean.write.mode("overwrite").parquet(f"{PROCESSED_DIR}/transactions")
     
     # 3. Traitement DPE (Diagnostics Energétiques)
@@ -66,17 +86,18 @@ def main():
         col("date_etablissement_dpe").alias("date_etablissement")
     ).dropna(subset=["commune_id"])
     
+    prepare_output_path(f"{PROCESSED_DIR}/dpe")
     df_dpe_clean.write.mode("overwrite").parquet(f"{PROCESSED_DIR}/dpe")
     
     # 4. Traitement Démographie (INSEE)
     print("Traitement de demographie_insee.zip (extraction préalable)...")
     zip_path = f"{RAW_DIR}/insee/demographie_insee.zip"
-    tmp_csv_path = "/tmp/donnees_communes.csv"
+    tmp_csv_path = f"{PROCESSED_DIR}/donnees_communes.csv"
     
     # Extraction propre du fichier cible
     if os.path.exists(zip_path):
         with zipfile.ZipFile(zip_path, 'r') as z:
-            z.extract("donnees_communes.csv", "/tmp/")
+            z.extract("donnees_communes.csv", PROCESSED_DIR)
             
         df_insee = spark.read.csv(tmp_csv_path, header=True, sep=";")
         df_insee_clean = df_insee.select(
@@ -84,7 +105,10 @@ def main():
             col("PMUN").cast("int").alias("population")
         ).withColumn("annee", lit(2023))
         
+        prepare_output_path(f"{PROCESSED_DIR}/demographics")
         df_insee_clean.write.mode("overwrite").parquet(f"{PROCESSED_DIR}/demographics")
+        if os.path.exists(tmp_csv_path):
+            os.remove(tmp_csv_path)
     else:
         print("Fichier INSEE introuvable, ingestion passée.")
         

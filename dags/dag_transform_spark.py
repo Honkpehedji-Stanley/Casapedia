@@ -32,8 +32,9 @@ with DAG(
         driver_memory='1g',
         verbose=True,
         conf={
-            'spark.driver.host': 'casapedia_airflow_scheduler',
-            'spark.driver.bindAddress': '0.0.0.0'
+            'spark.driver.host': 'airflow-scheduler',
+            'spark.driver.bindAddress': '0.0.0.0',
+            'spark.hadoop.fs.permissions.umask-mode': '000'
         }
     )
 
