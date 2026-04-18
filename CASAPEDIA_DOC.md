@@ -383,15 +383,29 @@ Casapedia/
 - Validation de fraîcheur des sources.
 - Gestion explicite des données manquantes.
 
+## 9.1 Ordre d'exécution cible
+
+L'objectif n'est pas de sauter directement vers les bases de données finales. Le pipeline doit respecter cet enchaînement :
+
+1. **Nettoyage, standardisation et curation** : `clean_tabulaires` transforme les sources brutes en jeux de données cohérents, typés et exploitables.
+2. **Enrichissements analytiques** : les jobs `sentiment_analysis.py` et `ML_predictions.py` exploitent les données déjà curées pour produire les sorties NLP et prédictives.
+3. **Publication en bases** : les jeux de données traités sont ensuite chargés dans PostgreSQL pour le tabulaire et dans MongoDB pour le textuel.
+
+### Statut actuel attendu
+
+- `clean_tabulaires` doit réellement faire le nettoyage métier, pas seulement déplacer les fichiers.
+- Les jobs NLP et ML font partie du plan initial et doivent être conservés dans la feuille de route.
+- Le chargement BDD reste l'étape finale, une fois les données traitées validées.
+
 ---
 
 ## 10) Recommandations opérationnelles (Stratégie d'évolution)
 
-1. **Abandonner l'insertion ligne-par-ligne** : Les DAGs Airflow se contentent de "Dumper" tous les Data Sets bruts dans le `datalake/raw`.
-2. **Setup du Cluster Spark** : Utiliser le `docker-compose.yml` déjà préparé pour lancer le worker Spark. Écrire le premier job PySpark.
-3. **Introduction d'Apache Airflow** : L'utiliser pour manager des pipelines ETL dignes d'un contexte de production, plutôt qu'un bash `run_pipeline.sh`.
-4. **Scraping Textuel (NLP)** : Coder un extracteur d'avis web pour nourrir la base de données orientée documents (MongoDB).
-5. **Livraison UX** : Pousser les données finales sur une application Streamlit optimisée par des clusters géospatiaux (MapBox).
+1. **Stabiliser le nettoyage/curation** : faire de `clean_tabulaires` une vraie étape métier avec standardisation, typage, fillna contrôlé et sorties propres.
+2. **Ajouter les jobs analytiques prévus** : implémenter `sentiment_analysis.py` pour le NLP et `ML_predictions.py` pour la prédiction sur les données déjà curées.
+3. **Conserver le découpage Airflow/Spark** : Airflow orchestre, Spark traite, puis les sorties validées sont publiées.
+4. **Publier en bases de données** : charger les données tabulaires dans PostgreSQL et les données textuelles/NLP dans MongoDB.
+5. **Livraison UX** : brancher l'application Streamlit sur ces données déjà traitées et persistées.
 
 ---
 
