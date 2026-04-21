@@ -1,8 +1,18 @@
+import sys
+from pathlib import Path
+
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from datetime import datetime, timedelta
+import tempfile
+
 import requests
-import os
+
+AIRFLOW_HOME = Path(__file__).resolve().parents[1]
+if str(AIRFLOW_HOME) not in sys.path:
+    sys.path.insert(0, str(AIRFLOW_HOME))
+
+from storage.minio_utils import ensure_bucket, get_minio_client, get_minio_settings, upload_fileobj
 
 # Configuration par défaut du DAG : "Les règles de production"
 default_args = {
@@ -18,30 +28,34 @@ def download_file(url, dest_folder, filename):
     """
     Fonction ELT : Téléchargement 'Dumb'.
     """
-    # Dans Docker, le datalake est monté sur /opt/airflow/datalake
-    base_path = f"/opt/airflow/datalake/raw/{dest_folder}"
-    os.makedirs(base_path, exist_ok=True)
-    file_path = os.path.join(base_path, filename)
-    
+    settings = get_minio_settings()
+    client = get_minio_client()
+    bucket = ensure_bucket(client, settings["bucket"])
+    object_key = f"raw/{dest_folder}/{filename}"
+
     print(f"Début du téléchargement : {url}")
-    
+
     with requests.get(url, stream=True) as r:
-        r.raise_for_status() # Lève une exception (et déclenche un Retry Airflow) si erreur 404/500
-        with open(file_path, 'wb') as f:
-            for chunk in r.iter_content(chunk_size=8192): 
-                f.write(chunk)
-                
-    print(f"Téléchargement terminé avec succès et sauvegardé sous : {file_path}")
+        r.raise_for_status()
+        with tempfile.NamedTemporaryFile(suffix=f"-{filename}") as temp_file:
+            for chunk in r.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    temp_file.write(chunk)
+            temp_file.flush()
+            temp_file.seek(0)
+            upload_fileobj(client, bucket, object_key, temp_file, content_type=r.headers.get("Content-Type"))
+
+    print(f"Téléchargement terminé avec succès et sauvegardé sous : s3a://{bucket}/{object_key}")
 
 # Définition du Workflow (DAG)
 with DAG(
     '1_ingestion_raw_data',
     default_args=default_args,
-    description='Téléchargement asynchrone des sources publiques vers le Datalake',
+    description='Téléchargement asynchrone des sources publiques vers MinIO',
     schedule_interval=timedelta(days=30), 
     start_date=datetime(2026, 4, 3),
     catchup=False,
-    tags=['casapedia', 'ingestion', 'datalake', 'raw'],
+    tags=['casapedia', 'ingestion', 'minio', 'raw'],
 ) as dag:
 
     # Tâche 1 : Ingestion des Communes (Référentiel de base)

@@ -1,0 +1,1 @@
+"""Shared storage helpers for Casapedia."""

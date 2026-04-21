@@ -2,6 +2,8 @@ from airflow import DAG
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from datetime import datetime, timedelta
 
+from spark_minio_conf import get_minio_spark_conf
+
 default_args = {
     'owner': 'casapedia',
     'depends_on_past': False,
@@ -12,11 +14,11 @@ default_args = {
 with DAG(
     '2_transform_spark_data',
     default_args=default_args,
-    description='Déclenche le nettoyage PySpark sur le Datalake via le cluster Spark Bitnami',
+    description='Déclenche le nettoyage PySpark sur MinIO via le cluster Spark Bitnami',
     schedule_interval=None, # Déclenchement manuel ou par TriggerDagRunOperator
     start_date=datetime(2026, 4, 3),
     catchup=False,
-    tags=['casapedia', 'transform', 'spark', 'datalake'],
+    tags=['casapedia', 'transform', 'spark', 'minio'],
 ) as dag:
 
     # Soumission du job PySpark au cluster Spark Master (Bitnami)
@@ -32,9 +34,10 @@ with DAG(
         driver_memory='1g',
         verbose=True,
         conf={
+            **get_minio_spark_conf(),
             'spark.driver.host': 'airflow-scheduler',
             'spark.driver.bindAddress': '0.0.0.0',
-            'spark.hadoop.fs.permissions.umask-mode': '000'
+            'spark.hadoop.fs.permissions.umask-mode': '000',
         }
     )
 

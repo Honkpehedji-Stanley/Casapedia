@@ -6,11 +6,11 @@ Ce document explique simplement ce que font les deux jobs d'analyse ajoutés au 
 
 L'objectif du pipeline n'est pas seulement de nettoyer les données. Il faut aussi produire des données analytiques utiles pour l'utilisateur final.
 
-- `clean_tabulaires.py` prépare les jeux de données tabulaires propres dans `datalake/processed`.
+- `clean_tabulaires.py` prépare les jeux de données tabulaires propres dans le bucket MinIO `casapedia-datalake/processed`.
 - `sentiment_analysis.py` produit des indicateurs textuels à partir d'avis ou de commentaires.
 - `ML_predictions.py` construit un modèle de prédiction du prix au m² à partir des données déjà curées.
 
-Les sorties de ces jobs sont d'abord écrites dans `datalake/processed`. Ensuite, lors d'une étape future, les jeux de données les plus utiles pourront être publiés vers PostgreSQL et MongoDB.
+Les sorties de ces jobs sont d'abord écrites dans le bucket MinIO `casapedia-datalake`, sous les préfixes `processed/...`. Ensuite, lors d'une étape future, les jeux de données les plus utiles pourront être publiés vers PostgreSQL et MongoDB.
 
 ## 2. Job `sentiment_analysis.py`
 
@@ -20,7 +20,7 @@ Ce job analyse du texte libre, par exemple des avis de ville, des commentaires o
 
 ### Entrées
 
-- Une source texte située par défaut dans `datalake/raw/reviews`.
+- Une source texte située par défaut dans `s3a://casapedia-datalake/raw/reviews`.
 - Le format attendu peut être `CSV`, `JSON` ou `TXT`.
 - Le job essaie d'identifier automatiquement des colonnes comme `text`, `review`, `comment`, `note`, `source` ou `commune_id`.
 
@@ -49,8 +49,8 @@ Il s'agit d'une méthode lexicale et déterministe, donc plus simple à interpr�
 
 ### Sorties produites
 
-- `datalake/processed/nlp/sentiments`
-- `datalake/processed/nlp/wordclouds`
+- `s3a://casapedia-datalake/processed/nlp/sentiments`
+- `s3a://casapedia-datalake/processed/nlp/wordclouds`
 
 ### Ce que cela permet d'afficher
 
@@ -68,10 +68,10 @@ Ce job apprend à prédire le prix au m² à partir des données immobilières e
 
 ### Entrées
 
-- `datalake/processed/transactions`
-- `datalake/processed/communes`
-- `datalake/processed/demographics`
-- `datalake/processed/dpe`
+- `s3a://casapedia-datalake/processed/transactions`
+- `s3a://casapedia-datalake/processed/communes`
+- `s3a://casapedia-datalake/processed/demographics`
+- `s3a://casapedia-datalake/processed/dpe`
 
 ### Variables utilisées
 
@@ -111,9 +111,9 @@ En clair:
 
 ### Sorties produites
 
-- `datalake/processed/ml_predictions/predictions`
-- `datalake/processed/ml_predictions/metrics`
-- `datalake/processed/ml_predictions/model`
+- `s3a://casapedia-datalake/processed/ml_predictions/predictions`
+- `s3a://casapedia-datalake/processed/ml_predictions/metrics`
+- `s3a://casapedia-datalake/processed/ml_predictions/model`
 
 ### Ce que cela permet d'afficher
 

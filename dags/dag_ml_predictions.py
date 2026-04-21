@@ -2,6 +2,8 @@ from airflow import DAG
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from datetime import datetime, timedelta
 
+from spark_minio_conf import get_minio_spark_conf
+
 
 default_args = {
     'owner': 'casapedia',
@@ -18,7 +20,7 @@ with DAG(
     schedule_interval=None,
     start_date=datetime(2026, 4, 19),
     catchup=False,
-    tags=['casapedia', 'ml', 'spark', 'prediction', 'datalake'],
+    tags=['casapedia', 'ml', 'spark', 'prediction', 'minio'],
 ) as dag:
 
     ml_predictions_spark = SparkSubmitOperator(
@@ -31,6 +33,7 @@ with DAG(
         driver_memory='1g',
         verbose=True,
         conf={
+            **get_minio_spark_conf(),
             'spark.driver.host': 'airflow-scheduler',
             'spark.driver.bindAddress': '0.0.0.0',
             'spark.hadoop.fs.permissions.umask-mode': '000',

@@ -12,14 +12,20 @@ x-airflow-common:
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres-airflow/airflow
     AIRFLOW__CORE__LOAD_DEFAULT_CONNECTIONS: 'false'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    PYTHONPATH: /opt/airflow
+    MINIO_ENDPOINT: http://minio:9000
+    MINIO_ROOT_USER: minioadmin
+    MINIO_ROOT_PASSWORD: minioadmin123
+    CASAPEDIA_S3_BUCKET: casapedia-datalake
   volumes:
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs
     - ./plugins:/opt/airflow/plugins
-    - ./datalake:/opt/airflow/datalake # Pour qu'Airflow puisse déclencher la validation des données brutes
     - ./spark_jobs:/opt/airflow/spark_jobs # Partage des scripts Spark
+    - ./storage:/opt/airflow/storage
   depends_on:
     - postgres-airflow
+    - minio
 
 services:
   # ==========================================
@@ -52,11 +58,42 @@ services:
     networks:
       - casapedia_network
 
+  minio:
+    image: minio/minio:latest
+    container_name: casapedia_minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+    networks:
+      - casapedia_network
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: casapedia_minio_init
+    depends_on:
+      - minio
+    entrypoint: /bin/sh -c
+    command: >-
+      "until (mc alias set casapedia http://minio:9000 minioadmin minioadmin123) do sleep 2; done;
+      mc mb -p casapedia/casapedia-datalake || true;
+      mc anonymous set private casapedia/casapedia-datalake || true;"
+    networks:
+      - casapedia_network
+
   # ==========================================
   # 2. CLUSTER BIG DATA (APACHE SPARK)
   # ==========================================
   spark-master:
-    image: bitnami/spark:latest
+    image: casapedia-spark:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
     container_name: casapedia_spark_master
     environment:
       - SPARK_MODE=master
@@ -64,17 +101,25 @@ services:
       - SPARK_RPC_ENCRYPTION_ENABLED=no
       - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
       - SPARK_SSL_ENABLED=no
+      - PYTHONPATH=/opt/airflow
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin123
+      - CASAPEDIA_S3_BUCKET=casapedia-datalake
     ports:
       - "8080:8080" # Interface Web Spark Master
       - "7077:7077" # Port de soumission des jobs cluster
     volumes:
-      - ./datalake:/opt/airflow/datalake
       - ./spark_jobs:/opt/airflow/spark_jobs
+      - ./storage:/opt/airflow/storage
     networks:
       - casapedia_network
 
   spark-worker:
-    image: bitnami/spark:latest
+    image: casapedia-spark:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
     container_name: casapedia_spark_worker
     environment:
       - SPARK_MODE=worker
@@ -85,11 +130,16 @@ services:
       - SPARK_RPC_ENCRYPTION_ENABLED=no
       - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
       - SPARK_SSL_ENABLED=no
+      - PYTHONPATH=/opt/airflow
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin123
+      - CASAPEDIA_S3_BUCKET=casapedia-datalake
     ports:
       - "8081:8081" # Interface Web Worker
     volumes:
-      - ./datalake:/opt/airflow/datalake
       - ./spark_jobs:/opt/airflow/spark_jobs
+      - ./storage:/opt/airflow/storage
     depends_on:
       - spark-master
     networks:
@@ -149,6 +199,7 @@ volumes:
   pgdata_app:
   mongodata:
   pgdata_airflow:
+  miniodata:
 
 networks:
   casapedia_network:

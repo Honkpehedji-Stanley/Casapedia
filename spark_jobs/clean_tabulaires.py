@@ -1,27 +1,23 @@
 import os
+import tempfile
 import zipfile
-import shutil
+from io import BytesIO
+import sys
+from pathlib import Path
+
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, concat, lit, lpad, trim
 
-# Chemins unifiés pour Docker
-RAW_DIR = "/opt/airflow/datalake/raw"
-PROCESSED_DIR = "/opt/airflow/datalake/processed"
+AIRFLOW_HOME = Path(__file__).resolve().parents[1]
+if str(AIRFLOW_HOME) not in sys.path:
+    sys.path.insert(0, str(AIRFLOW_HOME))
 
-
-def prepare_output_path(path):
-    if os.path.exists(path):
-        shutil.rmtree(path)
-    previous_umask = os.umask(0)
-    try:
-        os.makedirs(path, mode=0o777, exist_ok=True)
-        os.chmod(path, 0o777)
-    finally:
-        os.umask(previous_umask)
+S3_BUCKET = os.getenv("CASAPEDIA_S3_BUCKET", "casapedia-datalake")
+RAW_DIR = f"s3a://{S3_BUCKET}/raw"
+PROCESSED_DIR = f"s3a://{S3_BUCKET}/processed"
 
 
 def write_clean_parquet(df, path):
-    prepare_output_path(path)
     df.write.mode("overwrite").parquet(path)
 
 def main():
@@ -32,12 +28,6 @@ def main():
         .config("spark.driver.memory", "4g") \
         .getOrCreate()
 
-    previous_umask = os.umask(0)
-    try:
-        os.makedirs(PROCESSED_DIR, mode=0o777, exist_ok=True)
-    finally:
-        os.umask(previous_umask)
-    
     # 1. Traitement COMMUNES
     print("Traitement de communes.csv...")
     df_communes = spark.read.csv(f"{RAW_DIR}/communes/communes.csv", header=True, sep=",")
@@ -94,25 +84,31 @@ def main():
     
     # 4. Traitement Démographie (INSEE)
     print("Traitement de demographie_insee.zip (extraction préalable)...")
-    zip_path = f"{RAW_DIR}/insee/demographie_insee.zip"
-    tmp_csv_path = f"{PROCESSED_DIR}/donnees_communes.csv"
-    
-    # Extraction propre du fichier cible
-    if os.path.exists(zip_path):
-        with zipfile.ZipFile(zip_path, 'r') as z:
-            z.extract("donnees_communes.csv", PROCESSED_DIR)
-            
-        df_insee = spark.read.csv(tmp_csv_path, header=True, sep=";")
-        df_insee_clean = df_insee.select(
-            concat(trim(col("CODDEP")), lpad(trim(col("CODCOM")), 3, "0")).alias("commune_id"),
-            col("PMUN").cast("int").alias("population")
-        ).withColumn("annee", lit(2023))
+    with tempfile.TemporaryDirectory() as temp_dir:
+        local_zip_path = os.path.join(temp_dir, "demographie_insee.zip")
+        local_extract_dir = os.path.join(temp_dir, "extract")
+        os.makedirs(local_extract_dir, exist_ok=True)
 
-        write_clean_parquet(df_insee_clean.dropna(subset=["commune_id", "population"]), f"{PROCESSED_DIR}/demographics")
-        if os.path.exists(tmp_csv_path):
-            os.remove(tmp_csv_path)
-    else:
-        print("Fichier INSEE introuvable, ingestion passée.")
+        try:
+            zip_row = spark.read.format("binaryFile").load(f"{RAW_DIR}/insee/demographie_insee.zip").select("content").first()
+            if zip_row is None:
+                raise FileNotFoundError("Archive INSEE introuvable dans MinIO")
+
+            with open(local_zip_path, "wb") as local_zip_file:
+                local_zip_file.write(zip_row["content"])
+
+            with zipfile.ZipFile(BytesIO(zip_row["content"]), "r") as archive:
+                archive.extract("donnees_communes.csv", local_extract_dir)
+
+            df_insee = spark.read.csv(os.path.join(local_extract_dir, "donnees_communes.csv"), header=True, sep=";")
+            df_insee_clean = df_insee.select(
+                concat(trim(col("CODDEP")), lpad(trim(col("CODCOM")), 3, "0")).alias("commune_id"),
+                col("PMUN").cast("int").alias("population")
+            ).withColumn("annee", lit(2023))
+
+            write_clean_parquet(df_insee_clean.dropna(subset=["commune_id", "population"]), f"{PROCESSED_DIR}/demographics")
+        except Exception:
+            print("Fichier INSEE introuvable, ingestion passée.")
         
     print("Traitement Big Data PySpark terminé avec succès !")
     spark.stop()

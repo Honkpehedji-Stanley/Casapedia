@@ -1,29 +1,16 @@
 import os
-import shutil
 
 from pyspark.ml import Pipeline
 from pyspark.ml.feature import Imputer, OneHotEncoder, StringIndexer, VectorAssembler
 from pyspark.ml.regression import LinearRegression
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import avg, coalesce, col, count, lit, month, to_date, trim, year
+from pyspark.sql.functions import avg, coalesce, col, count, month, to_date, trim, year
 
-
-PROCESSED_DIR = "/opt/airflow/datalake/processed"
-
-
-def prepare_output_path(path):
-    if os.path.exists(path):
-        shutil.rmtree(path)
-    previous_umask = os.umask(0)
-    try:
-        os.makedirs(path, mode=0o777, exist_ok=True)
-        os.chmod(path, 0o777)
-    finally:
-        os.umask(previous_umask)
+S3_BUCKET = os.getenv("CASAPEDIA_S3_BUCKET", "casapedia-datalake")
+PROCESSED_DIR = f"s3a://{S3_BUCKET}/processed"
 
 
 def write_clean_parquet(df, path):
-    prepare_output_path(path)
     df.write.mode("overwrite").parquet(path)
 
 
@@ -41,14 +28,14 @@ def main():
     communes = spark.read.parquet(communes_path)
     demographics = spark.read.parquet(demographics_path)
 
-    if os.path.exists(dpe_path):
+    try:
         dpe = spark.read.parquet(dpe_path)
         dpe_agg = dpe.groupBy("commune_id").agg(
             avg("emissions_co2").alias("avg_emissions_co2"),
             avg("consommation_energie").alias("avg_consumption_energie"),
             count("id").alias("dpe_volume"),
         )
-    else:
+    except Exception:
         dpe_agg = spark.createDataFrame([], "commune_id string, avg_emissions_co2 double, avg_consumption_energie double, dpe_volume long")
 
     communes_features = communes.select(
@@ -149,7 +136,6 @@ def main():
     write_clean_parquet(predictions, output_path)
     write_clean_parquet(metrics_df, metrics_path)
 
-    prepare_output_path(model_path)
     model.write().overwrite().save(model_path)
 
     print("Job ML terminé avec succès.")

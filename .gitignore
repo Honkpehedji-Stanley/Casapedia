@@ -33,6 +33,7 @@ data/cache/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/cache/.gitkeep
+datalake/
 
 # Notebooks
 .ipynb_checkpoints

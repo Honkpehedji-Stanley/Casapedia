@@ -1,10 +1,8 @@
 import os
-import shutil
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col,
-    concat_ws,
     count,
     explode,
     lit,
@@ -16,9 +14,9 @@ from pyspark.sql.functions import (
     when,
 )
 
-
-RAW_DIR = "/opt/airflow/datalake/raw"
-PROCESSED_DIR = "/opt/airflow/datalake/processed"
+S3_BUCKET = os.getenv("CASAPEDIA_S3_BUCKET", "casapedia-datalake")
+RAW_DIR = f"s3a://{S3_BUCKET}/raw"
+PROCESSED_DIR = f"s3a://{S3_BUCKET}/processed"
 
 POSITIVE_WORDS = [
     "agreable",
@@ -52,19 +50,7 @@ NEGATIVE_WORDS = [
 ]
 
 
-def prepare_output_path(path):
-    if os.path.exists(path):
-        shutil.rmtree(path)
-    previous_umask = os.umask(0)
-    try:
-        os.makedirs(path, mode=0o777, exist_ok=True)
-        os.chmod(path, 0o777)
-    finally:
-        os.umask(previous_umask)
-
-
 def write_clean_parquet(df, path):
-    prepare_output_path(path)
     df.write.mode("overwrite").parquet(path)
 
 
@@ -82,29 +68,32 @@ def first_existing_column(columns, candidates):
 
 
 def read_reviews_dataset(spark, input_path):
-    if os.path.isfile(input_path):
-        lower_path = input_path.lower()
-        if lower_path.endswith(".csv"):
-            return spark.read.csv(input_path, header=True, inferSchema=True)
-        if lower_path.endswith(".json"):
-            return spark.read.json(input_path)
-        return spark.read.text(input_path).withColumnRenamed("value", "text")
+    lower_path = input_path.lower()
+    readers = []
 
-    if os.path.isdir(input_path):
-        csv_files = [name for name in os.listdir(input_path) if name.lower().endswith(".csv")]
-        json_files = [name for name in os.listdir(input_path) if name.lower().endswith(".json")]
-        txt_files = [name for name in os.listdir(input_path) if name.lower().endswith(".txt")]
+    if lower_path.endswith(".csv"):
+        readers.append(lambda: spark.read.csv(input_path, header=True, inferSchema=True))
+    elif lower_path.endswith(".json"):
+        readers.append(lambda: spark.read.json(input_path))
+    elif lower_path.endswith(".txt"):
+        readers.append(lambda: spark.read.text(input_path).withColumnRenamed("value", "text"))
+    else:
+        readers.extend([
+            lambda: spark.read.csv(f"{input_path}/*.csv", header=True, inferSchema=True),
+            lambda: spark.read.json(f"{input_path}/*.json"),
+            lambda: spark.read.text(f"{input_path}/*.txt").withColumnRenamed("value", "text"),
+        ])
 
-        if csv_files:
-            return spark.read.csv(os.path.join(input_path, "*.csv"), header=True, inferSchema=True)
-        if json_files:
-            return spark.read.json(os.path.join(input_path, "*.json"))
-        if txt_files:
-            return spark.read.text(os.path.join(input_path, "*.txt")).withColumnRenamed("value", "text")
+    last_error = None
+    for reader in readers:
+        try:
+            return reader()
+        except Exception as error:
+            last_error = error
 
     raise FileNotFoundError(
-        f"Aucune source texte trouvée dans {input_path}. Ajoute un CSV, JSON ou TXT de reviews avant d'exécuter le job."
-    )
+        f"Aucune source texte exploitable trouvée dans {input_path}."
+    ) from last_error
 
 
 def main():

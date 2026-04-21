@@ -82,11 +82,10 @@ Le projet couvre l'ensemble du territoire français métropolitain et propose un
 ```text
 Casapedia/
 ├── dags/                    # Graphes Airflow (Pipelines d'ingestion/processing)
-│   ├── dag_ingestion.py     # Extraction asynchrone des APIs vers Datalake
+│   ├── dag_ingestion.py     # Extraction asynchrone des APIs vers MinIO
 │   └── ...
-├── datalake/                # Lac de données local
-│   ├── raw/                 # Données brutes téléchargées (CSV, ZIP, JSON)
-│   └── processed/           # Données nettoyées (Parquet/Delta) par Spark
+├── storage/                 # Helpers MinIO partagés par Airflow et Spark
+├── MinIO                    # Bucket `casapedia-datalake` pour raw/ et processed/
 ├── database/                # Connecteurs aux bases
 │   ├── pg_manager.py        # Gestionnaire PostgreSQL
 │   └── mongo_manager.py     # Gestionnaire MongoDB
@@ -179,8 +178,8 @@ Pour que l'orchestrateur puisse soumettre des jobs au cluster Spark, ajoutez une
 3. Sauvegardez.
 
 **4. Lancer les DAGs ELT (Collecte & Transformation)**
-1. **Activer le DAG `1_ingestion_raw_data`** : Télécharge les fichiers bruts dans le dossier partagé `datalake/raw/`.
-2. **Activer le DAG `2_transform_spark_data`** : Lisse les données et soumet le job `clean_tabulaires.py` au cluster Spark. Génère les formats consolidés compressés (Parquet) dans `datalake/processed/`.
+1. **Activer le DAG `1_ingestion_raw_data`** : Télécharge les fichiers bruts dans le bucket MinIO `casapedia-datalake/raw/`.
+2. **Activer le DAG `2_transform_spark_data`** : Lisse les données et soumet le job `clean_tabulaires.py` au cluster Spark. Génère les formats consolidés compressés (Parquet) dans le bucket MinIO `casapedia-datalake/processed/`.
 
 **5. Documentation détaillée**
 Pour comprendre l'architecture Big Data complète, veuillez vous référer au fichier détaillé `CASAPEDIA_DOC.md`.

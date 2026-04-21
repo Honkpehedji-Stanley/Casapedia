@@ -27,8 +27,8 @@ flowchart TD
         C --> A
     end
 
-    subgraph S2[2. Data Lake local]
-        DL_RAW[("Datalake: RAW\n(CSV, ZIP, JSON)")]
+    subgraph S2[2. MinIO Object Storage]
+        DL_RAW[("MinIO: RAW\n(CSV, ZIP, JSON)")]
         A == "Dump brut" ==> DL_RAW
     end
 
@@ -41,7 +41,7 @@ flowchart TD
         P1["PySpark: Nettoyage\n& FillNA massifs"]
         P2["Spark MLlib: \nPrédiction Prix (Regression)"]
         P3["Spark NLP: Analyse\nde Sentiment (Avis)"]
-        DL_PRO[("Datalake: PROCESSED\n(Parquet / Delta)")]
+        DL_PRO[("MinIO: PROCESSED\n(Parquet / Delta)")]
         
         DL_RAW -->|Lecture Distribuée| SP_M
         SP_M --> P1
@@ -85,7 +85,7 @@ Airflow remplace et transcende le système de scripts Bash (`run_pipeline.sh`). 
 
 ### Composants Technologiques
 
-- **Ingestion "Dumb"** : Modèle ELT (Extract, Load, Transform). Les DAGs Airflow téléchargent directement les gros fichiers bruts asynchrone (Requests stream) vers `datalake/raw/...` sans essayer d'insérer dans la BDD.
+- **Ingestion "Dumb"** : Modèle ELT (Extract, Load, Transform). Les DAGs Airflow téléchargent directement les gros fichiers bruts asynchrone (Requests stream) vers MinIO, dans le bucket `casapedia-datalake/raw/...`, sans essayer d'insérer dans la BDD.
 - **Processing Distribué** : L'outil **Apache Spark (PySpark)** traite les énormes chunks en mémoire distribuée (via des DataFrames Spark parcellisés), réduisant par 100 le temps de transformation par rapport à pandas/for-loops.
 - **Stockage Hybride / Polyglotte** : 
    - **PostgreSQL** : Pour le relationnel à faible latence visuelle (prix au m², taille, infos géographiques).
@@ -133,7 +133,7 @@ flowchart TD
 ### Note importante
 
 - Les DAGs d'ingestion utilisent des **sources publiques** qui génèrent des Giga-octets d'informations.
-- La collecte se sépare radicalement du traitement pour ne pas créer de goulots d'étranglement (Datalake first).
+- La collecte se sépare radicalement du traitement pour ne pas créer de goulots d'étranglement (stockage objet first).
 
 ---
 
@@ -345,12 +345,11 @@ erDiagram
 ```
 Casapedia/
 ├── dags/                     # Dossier central d'Apache Airflow (Les pipelines orchestrés)
-│   ├── dag_ingestion.py      # Tâches asynchrones de scraping vers Datalake
+│   ├── dag_ingestion.py      # Tâches asynchrones de scraping vers MinIO
 │   ├── dag_processing.py     # Tâches déclenchant les scripts PySpark
 │   └── utils/                # Fonctions partagées pour les Sensors et Operators
-├── datalake/                 # Stockage des fichiers bruts (Raw & Processed) par Spark
-│   ├── raw/                  # Ex: dvf_2023.csv, avis_villes.json
-│   └── processed/            # Parquet files nettoyés et standardisés
+├── storage/                  # Helpers partagés pour MinIO/S3A
+├── MinIO                     # Stockage objet du pipeline (bucket `casapedia-datalake`)
 ├── docker-compose.yml        # Instanciation de l'infrastructure complète (Postgres, Mongo, Spark, Airflow)
 ├── database/
 │   ├── mongo_manager.py      # Connecteur pour la base de données NoSQL
@@ -401,9 +400,9 @@ L'objectif n'est pas de sauter directement vers les bases de données finales. L
 
 ## 10) Recommandations opérationnelles (Stratégie d'évolution)
 
-1. **Stabiliser le nettoyage/curation** : faire de `clean_tabulaires` une vraie étape métier avec standardisation, typage, fillna contrôlé et sorties propres.
+1. **Stabiliser le nettoyage/curation** : faire de `clean_tabulaires` une vraie étape métier avec standardisation, typage, fillna contrôlé et sorties propres dans MinIO.
 2. **Ajouter les jobs analytiques prévus** : implémenter `sentiment_analysis.py` pour le NLP et `ML_predictions.py` pour la prédiction sur les données déjà curées.
-3. **Conserver le découpage Airflow/Spark** : Airflow orchestre, Spark traite, puis les sorties validées sont publiées.
+3. **Conserver le découpage Airflow/Spark** : Airflow orchestre, Spark traite, puis les sorties validées sont publiées dans MinIO.
 4. **Publier en bases de données** : charger les données tabulaires dans PostgreSQL et les données textuelles/NLP dans MongoDB.
 5. **Livraison UX** : brancher l'application Streamlit sur ces données déjà traitées et persistées.
 
@@ -411,7 +410,7 @@ L'objectif n'est pas de sauter directement vers les bases de données finales. L
 
 ## 11) Mini glossaire
 
-- **Datalake (Lac de données)** : Espace de stockage recevant les données brutes dans leur format initial sans modification.
+- **MinIO / Bucket RAW** : Espace de stockage recevant les données brutes dans leur format initial sans modification.
 - **Cluster Spark** : Réseau de machines qui travaillent ensemble pour calculer et filtrer des millions de données très vite.
 - **NLP (Traitement du Langage Naturel)** : Algorithmes IA capables de "lire" du texte pour définir s'il est positif, négatif et en sortir les mots forts.
 - **Airflow / DAG** : Outil visuel qui construit des graphes d'ordonnancement complexes (ex: d'abord le code X, s'il réussit tourne le code Y).

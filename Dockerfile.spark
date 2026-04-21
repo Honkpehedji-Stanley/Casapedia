@@ -1,0 +1,7 @@
+FROM bitnami/spark:latest
+
+USER root
+
+RUN pip install --no-cache-dir numpy==1.26.3
+
+USER 1001

@@ -8,4 +8,4 @@ RUN apt-get update && \
 
 USER airflow
 # Installation du provider Spark pour Airflow et de pyspark compatible avec Spark 4.0 (bitnami/spark:latest)
-RUN pip install --no-cache-dir "apache-airflow==2.10.2" apache-airflow-providers-apache-spark pyspark==4.0.0 pandas
+RUN pip install --no-cache-dir "apache-airflow==2.10.2" apache-airflow-providers-apache-spark pyspark==4.0.0 pandas boto3
