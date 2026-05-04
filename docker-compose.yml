@@ -12,6 +12,7 @@ x-airflow-common:
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres-airflow/airflow
     AIRFLOW__CORE__LOAD_DEFAULT_CONNECTIONS: 'false'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__WEBSERVER__SECRET_KEY: casapedia-airflow-secret-key
     PYTHONPATH: /opt/airflow
     MINIO_ENDPOINT: http://minio:9000
     MINIO_ROOT_USER: minioadmin
