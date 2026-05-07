@@ -3,6 +3,7 @@ import os
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col,
+    avg,
     count,
     explode,
     lit,
@@ -41,12 +42,45 @@ NEGATIVE_WORDS = [
     "bruyant",
     "cher",
     "dangereux",
-    "degrade",
+    "dégradé",
     "difficile",
     "sale",
     "stressant",
     "triste",
     "violent",
+]
+
+THEME_RULES = [
+    (
+        "sécurité",
+        "sécurité",
+        r"(dangereux|violen|agressif|stressant|insécur|insecur|bruyant)",
+    ),
+    (
+        "transports",
+        "transports",
+        r"(transport|bus|tram|metro|métro|train|gare|trafic|circul|parking|voitur)",
+    ),
+    (
+        "écoles",
+        "écoles",
+        r"(ecole|école|college|collège|lycee|lycée|creche|crèche|université)",
+    ),
+    (
+        "propreté",
+        "propreté",
+        r"(propre|sale|propreté|proprete|dechet|déchet|entretien)",
+    ),
+    (
+        "cadre_de_vie",
+        "cadre_de_vie",
+        r"(calme|agreable|agréable|sympa|vivable|verdure|parc|ambiance)",
+    ),
+    (
+        "commerces_services",
+        "commerces_et_services",
+        r"(commerce|magasin|restaurant|supermarch|boulanger|service|amenag|aménag)",
+    ),
 ]
 
 
@@ -65,6 +99,38 @@ def first_existing_column(columns, candidates):
         if candidate in columns:
             return candidate
     return None
+
+
+def build_theme_mentions(prepared_df):
+    theme_frames = []
+
+    for theme_key, theme_label, pattern in THEME_RULES:
+        theme_frames.append(
+            prepared_df.where(lower(col("clean_text")).rlike(pattern)).select(
+                "commune_id",
+                "source",
+                "review_text",
+                "clean_text",
+                "rating",
+            ).withColumn("theme", lit(theme_key)).withColumn("theme_label", lit(theme_label))
+        )
+
+    if not theme_frames:
+        return prepared_df.limit(0).select(
+            "commune_id",
+            "source",
+            "review_text",
+            "clean_text",
+            "rating",
+            lit(None).cast("string").alias("theme"),
+            lit(None).cast("string").alias("theme_label"),
+        )
+
+    theme_mentions = theme_frames[0]
+    for frame in theme_frames[1:]:
+        theme_mentions = theme_mentions.unionByName(frame)
+
+    return theme_mentions
 
 
 def read_reviews_dataset(spark, input_path):
@@ -158,6 +224,28 @@ def main():
         .otherwise(lit("neutral")),
     )
 
+    theme_mentions = build_theme_mentions(prepared)
+    theme_sentiments = theme_mentions.join(
+        aggregated_sentiment,
+        on=["commune_id", "source", "review_text", "clean_text", "rating"],
+        how="left",
+    ).groupBy(
+        "commune_id",
+        "source",
+        "theme",
+        "theme_label",
+    ).agg(
+        count("theme").alias("mention_count"),
+        avg("sentiment_score").alias("avg_sentiment_score"),
+        spark_sum(when(col("sentiment_label") == "positive", lit(1)).otherwise(lit(0))).alias("positive_reviews"),
+        spark_sum(when(col("sentiment_label") == "negative", lit(1)).otherwise(lit(0))).alias("negative_reviews"),
+    ).withColumn(
+        "theme_sentiment_label",
+        when(col("avg_sentiment_score") > 0, lit("positive"))
+        .when(col("avg_sentiment_score") < 0, lit("negative"))
+        .otherwise(lit("neutral")),
+    )
+
     wordclouds = tokenized.where(~col("token").isin("", "le", "la", "les", "de", "des", "du", "et", "a", "un", "une")).groupBy(
         "commune_id",
         "source",
@@ -168,6 +256,8 @@ def main():
 
     write_clean_parquet(aggregated_sentiment, f"{output_root}/sentiments")
     write_clean_parquet(wordclouds, f"{output_root}/wordclouds")
+    write_clean_parquet(theme_mentions, f"{output_root}/themes")
+    write_clean_parquet(theme_sentiments, f"{output_root}/theme_sentiments")
 
     print("Job NLP terminé avec succès.")
     spark.stop()
