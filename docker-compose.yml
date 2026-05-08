@@ -24,6 +24,7 @@ x-airflow-common:
     - ./plugins:/opt/airflow/plugins
     - ./spark_jobs:/opt/airflow/spark_jobs # Partage des scripts Spark
     - ./storage:/opt/airflow/storage
+    - ./libs:/opt/airflow/libs
   depends_on:
     - postgres-airflow
     - minio

@@ -10,14 +10,14 @@ Le pipeline suit cet ordre:
 
 1. Les fichiers bruts sont déposés dans MinIO dans `s3a://casapedia-datalake/raw/...`.
 2. `clean_tabulaires.py` nettoie et standardise les données, puis écrit les jeux de données curés dans `s3a://casapedia-datalake/processed/...`.
-3. `sentiment_analysis.py` lit une source texte et calcule des indicateurs de sentiment et de thèmes.
+3. `sentiment_analysis.py` lit une source texte et calcule des indicateurs de sentiment, de thèmes et de mots-clés.
 4. `ML_predictions.py` lit les données tabulaires déjà curées et entraîne un modèle de prédiction du prix au m².
 
 ## 2. Job `sentiment_analysis.py`
 
 ### But
 
-Ce job prend des avis, commentaires ou messages textuels et transforme ce texte en indicateurs de sentiment et de thèmes exploitables.
+Ce job prend des avis, commentaires ou messages textuels et transforme ce texte en indicateurs de sentiment, de thèmes et de mots-clés exploitables.
 
 ### Ce que le job lit
 
@@ -94,7 +94,8 @@ La partie thèmes reste elle aussi simple et explicable: elle cherche la présen
 
 - un score de sentiment par avis,
 - une répartition positive / négative / neutre,
-- les mots les plus fréquents dans les commentaires.
+- les mots les plus fréquents dans les commentaires,
+- un tableau par thème pour expliquer pourquoi une ville ressort bien ou mal.
 
 ## 3. Job `ML_predictions.py`
 

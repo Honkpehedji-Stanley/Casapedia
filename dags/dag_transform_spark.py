@@ -34,6 +34,22 @@ with DAG(
         driver_memory='1g',
         verbose=True,
         conf={
+            'spark.driver.host': 'airflow-scheduler',
+            'spark.driver.bindAddress': '0.0.0.0',
+        }
+    )
+
+    clean_reviews_spark = SparkSubmitOperator(
+        task_id='clean_reviews_job',
+        application='/opt/airflow/spark_jobs/clean_reviews.py',
+        conn_id='spark_default',
+        name='Airflow_PySpark_Reviews_Job',
+        executor_cores=1,
+        executor_memory='1g',
+        driver_memory='1g',
+        jars='/opt/airflow/libs/hadoop-aws-3.4.1.jar,/opt/airflow/libs/aws-bundle-2.24.6.jar',
+        verbose=True,
+        conf={
             **get_minio_spark_conf(),
             'spark.driver.host': 'airflow-scheduler',
             'spark.driver.bindAddress': '0.0.0.0',
@@ -41,4 +57,4 @@ with DAG(
         }
     )
 
-    clean_data_spark
+    [clean_data_spark, clean_reviews_spark]

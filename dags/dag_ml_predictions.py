@@ -31,6 +31,7 @@ with DAG(
         executor_cores=1,
         executor_memory='1g',
         driver_memory='1g',
+        packages='org.apache.hadoop:hadoop-aws:3.4.1',
         verbose=True,
         conf={
             **get_minio_spark_conf(),

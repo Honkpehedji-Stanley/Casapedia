@@ -3,8 +3,12 @@ FROM apache/airflow:2.10.2-python3.11
 USER root
 # Installation de Java (requis pour spark-submit)
 RUN apt-get update && \
-    apt-get install -y default-jre-headless && \
+    apt-get install -y default-jre-headless curl && \
     apt-get clean
+
+RUN mkdir -p /opt/airflow/lib && \
+    curl -fL https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.4.1/hadoop-aws-3.4.1.jar \
+    -o /opt/airflow/lib/hadoop-aws-3.4.1.jar
 
 USER airflow
 # Installation du provider Spark pour Airflow et de pyspark compatible avec Spark 4.0 (bitnami/spark:latest)
