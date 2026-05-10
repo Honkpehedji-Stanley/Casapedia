@@ -43,6 +43,14 @@ def write_jsonl_to_minio(df, output_prefix, filename):
     upload_fileobj(client, bucket, object_key, buffer, content_type="application/x-ndjson")
     print(f"Jeu de données écrit dans : s3a://{bucket}/{object_key}")
 
+
+def print_year_coverage(df, date_column, label):
+    years = [row[0] for row in df.selectExpr(f"substring({date_column}, 1, 4) as annee").where("annee is not null and annee <> ''").distinct().orderBy("annee").collect()]
+    if years:
+        print(f"{label} - années présentes: {', '.join(years)}")
+    else:
+        print(f"{label} - aucune année explicite trouvée dans la colonne {date_column}")
+
 def main():
     print("Initialisation de SparkSession...")
     spark = SparkSession.builder \
@@ -70,6 +78,11 @@ def main():
             trim(col("nom_region")).alias("region")
         ).dropDuplicates(["code_insee"])
 
+        communes_count = df_communes_clean.count()
+        print(f"Nombre d'entrées communes distinctes dans la source: {communes_count}")
+        print(f"Nombre de lignes communes brutes dans le fichier source: {df_communes.count()}")
+        print("Attention: ce compteur reflète les codes géographiques présents dans la source, pas le seul périmètre des communes actives en France.")
+
         write_jsonl_to_minio(df_communes_clean, "processed/communes", "communes.jsonl")
 
         # 2. Traitement DVF (Valeurs Foncières)
@@ -92,6 +105,9 @@ def main():
          .withColumn("prix_m2", col("prix") / col("surface")) \
          .dropDuplicates(["id"])
 
+        print(f"DVF - lignes sources: {df_dvf.count()}")
+        print_year_coverage(df_dvf, "date_mutation", "DVF")
+
         write_jsonl_to_minio(df_dvf_clean, "processed/transactions", "transactions.jsonl")
 
         # 3. Traitement DPE (Diagnostics Énergétiques)
@@ -111,6 +127,9 @@ def main():
             col("surface_habitable_logement").cast("float").alias("surface"),
             trim(col("date_etablissement_dpe")).alias("date_etablissement")
         ).dropna(subset=["commune_id"]).dropDuplicates(["id"])
+
+        print(f"DPE - lignes sources: {df_dpe.count()}")
+        print_year_coverage(df_dpe, "date_etablissement_dpe", "DPE")
 
         write_jsonl_to_minio(df_dpe_clean, "processed/dpe", "dpe.jsonl")
 
@@ -135,6 +154,9 @@ def main():
                 concat(trim(col("CODDEP")), lpad(trim(col("CODCOM")), 3, "0")).alias("commune_id"),
                 col("PMUN").cast("int").alias("population")
             ).withColumn("annee", lit(2023))
+
+            print(f"INSEE - lignes sources: {df_insee.count()}")
+            print("INSEE - année de traitement fixée par le job: 2023")
 
             write_jsonl_to_minio(df_insee_clean.dropna(subset=["commune_id", "population"]), "processed/demographics", "demographics.jsonl")
         except Exception:
