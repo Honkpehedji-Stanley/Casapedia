@@ -1,8 +1,12 @@
 import os
+import json
 import tempfile
 import zipfile
 import sys
+from collections import Counter
+from csv import DictReader
 from pathlib import Path
+from urllib.request import urlopen
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, concat, lit, lpad, trim
@@ -19,6 +23,11 @@ S3_BUCKET = os.getenv("CASAPEDIA_S3_BUCKET", "casapedia-datalake")
 RAW_DIR = f"s3a://{S3_BUCKET}/raw"
 PROCESSED_DIR = f"s3a://{S3_BUCKET}/processed"
 SHARED_WORK_DIR = AIRFLOW_HOME / "spark_jobs" / "_work" / "clean_tabulaires"
+COG_COMMUNE_URL = os.getenv(
+    "CASAPEDIA_COG_COMMUNES_URL",
+    "https://www.insee.fr/fr/statistiques/fichier/8740222/v_commune_2026.csv",
+)
+COG_COMMUNE_MILLESIME = os.getenv("CASAPEDIA_COG_COMMUNE_MILLESIME", "2026")
 
 
 def download_raw_object(object_key, destination_path):
@@ -44,12 +53,86 @@ def write_jsonl_to_minio(df, output_prefix, filename):
     print(f"Jeu de données écrit dans : s3a://{bucket}/{object_key}")
 
 
+def write_json_to_minio(payload, output_prefix, filename):
+    client = get_minio_client()
+    settings = get_minio_settings()
+    bucket = ensure_bucket(client, settings["bucket"])
+
+    buffer = BytesIO(json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"))
+    object_key = f"{output_prefix}/{filename}"
+    upload_fileobj(client, bucket, object_key, buffer, content_type="application/json")
+    print(f"Rapport QA écrit dans : s3a://{bucket}/{object_key}")
+
+
+def load_current_cog_commune_codes():
+    current_codes = set()
+    type_counts = Counter()
+
+    with urlopen(COG_COMMUNE_URL, timeout=60) as response:
+        decoded = (line.decode("utf-8", "replace") for line in response)
+        reader = DictReader(decoded)
+        for row in reader:
+            type_code = (row.get("TYPECOM") or "").strip()
+            commune_code = (row.get("COM") or "").strip()
+            if not commune_code:
+                continue
+            type_counts[type_code] += 1
+            if type_code == "COM":
+                current_codes.add(commune_code)
+
+    return current_codes, dict(type_counts)
+
+
 def print_year_coverage(df, date_column, label):
     years = [row[0] for row in df.selectExpr(f"substring({date_column}, 1, 4) as annee").where("annee is not null and annee <> ''").distinct().orderBy("annee").collect()]
     if years:
         print(f"{label} - années présentes: {', '.join(years)}")
     else:
         print(f"{label} - aucune année explicite trouvée dans la colonne {date_column}")
+
+
+def build_commune_qa_report(df_communes_source, df_communes_clean, active_commune_codes, cog_type_counts):
+    source_distinct_codes = df_communes_clean.select("code_insee").where(col("code_insee").isNotNull()).distinct()
+    active_codes_df = df_communes_clean.sparkSession.createDataFrame(
+        [(code,) for code in active_commune_codes],
+        ["code_insee"],
+    )
+
+    active_communes = source_distinct_codes.join(active_codes_df, on="code_insee", how="inner")
+    historical_communes = source_distinct_codes.join(active_codes_df, on="code_insee", how="left_anti")
+    duplicated_codes = df_communes_source.groupBy("code_commune_INSEE").count().where(col("count") > 1)
+
+    active_count = active_communes.count()
+    historical_count = historical_communes.count()
+    distinct_count = source_distinct_codes.count()
+    raw_count = df_communes_source.count()
+
+    historical_examples = [row[0] for row in historical_communes.orderBy("code_insee").limit(20).collect()]
+    duplicate_examples = [
+        {"code_commune_INSEE": row[0], "occurrences": row[1]}
+        for row in duplicated_codes.orderBy(col("count").desc(), col("code_commune_INSEE")).limit(20).collect()
+    ]
+
+    return {
+        "source": {
+            "file": "raw/communes/communes.csv",
+            "raw_rows": raw_count,
+            "distinct_code_insee": distinct_count,
+            "duplicate_code_rows": raw_count - distinct_count,
+            "active_codes_in_current_cog": active_count,
+            "historical_or_non_current_codes": historical_count,
+            "active_vs_historical_gap": distinct_count - active_count,
+            "current_cog_millesime": COG_COMMUNE_MILLESIME,
+            "current_cog_url": COG_COMMUNE_URL,
+            "current_cog_type_distribution": cog_type_counts,
+            "historical_code_examples": historical_examples,
+            "duplicate_code_examples": duplicate_examples,
+            "note": (
+                "Les codes non présents dans le COG courant incluent des codes historiques, des communes associées ou déléguées, "
+                "et des lignes sources répliquées par code postal ou zonage local."
+            ),
+        }
+    }
 
 def main():
     print("Initialisation de SparkSession...")
@@ -69,7 +152,7 @@ def main():
         download_raw_object("raw/communes/communes.csv", local_communes_path)
         df_communes = spark.read.csv(local_communes_path, header=True, sep=",")
         df_communes_clean = df_communes.select(
-            trim(col("code_commune_INSEE")).alias("code_insee"),
+            lpad(trim(col("code_commune_INSEE")), 5, "0").alias("code_insee"),
             trim(col("nom_commune")).alias("nom"),
             trim(col("code_postal")).alias("code_postal"),
             col("latitude").cast("double").alias("latitude"),
@@ -78,12 +161,25 @@ def main():
             trim(col("nom_region")).alias("region")
         ).dropDuplicates(["code_insee"])
 
+        active_commune_codes, cog_type_counts = load_current_cog_commune_codes()
         communes_count = df_communes_clean.count()
+        commune_qa_report = build_commune_qa_report(df_communes, df_communes_clean, active_commune_codes, cog_type_counts)
+
         print(f"Nombre d'entrées communes distinctes dans la source: {communes_count}")
         print(f"Nombre de lignes communes brutes dans le fichier source: {df_communes.count()}")
-        print("Attention: ce compteur reflète les codes géographiques présents dans la source, pas le seul périmètre des communes actives en France.")
+        print(
+            f"Communes actives selon le COG {COG_COMMUNE_MILLESIME}: {commune_qa_report['source']['active_codes_in_current_cog']}"
+        )
+        print(
+            f"Communes historiques ou non courantes dans la source: {commune_qa_report['source']['historical_or_non_current_codes']}"
+        )
+        print(
+            "Attention: les lignes restantes regroupent des codes historiques, des communes associées ou déléguées, "
+            "et des doublons de zonage local."
+        )
 
         write_jsonl_to_minio(df_communes_clean, "processed/communes", "communes.jsonl")
+        write_json_to_minio(commune_qa_report, "processed/qa", "source_qa.json")
 
         # 2. Traitement DVF (Valeurs Foncières)
         print("Traitement de transactions_dvf_brut.csv.gz...")
@@ -159,6 +255,17 @@ def main():
             print("INSEE - année de traitement fixée par le job: 2023")
 
             write_jsonl_to_minio(df_insee_clean.dropna(subset=["commune_id", "population"]), "processed/demographics", "demographics.jsonl")
+            write_json_to_minio(
+                {
+                    "source": {
+                        "file": "raw/insee/demographie_insee.zip",
+                        "processed_year": 2023,
+                        "note": "Le millésime n'est pas porté explicitement par le fichier brut; le job l'attache au moment du traitement.",
+                    }
+                },
+                "processed/qa",
+                "insee_source_qa.json",
+            )
         except Exception:
             print("Fichier INSEE introuvable, ingestion passée.")
         

@@ -124,7 +124,7 @@ flowchart TD
 
 | Source | Producteur | Type | Granularité | Variables clés | Usage principal |
 | --- | --- | --- | --- | --- | --- |
-| Référentiel communes | data.gouv.fr / INSEE | CSV | Commune | code INSEE, nom, dept, région, latitude, longitude | Clé géographique maître |
+| Référentiel communes | data.gouv.fr / INSEE | CSV | Commune | code INSEE normalisé, nom, dept, région, latitude, longitude, statut actif/historique | Clé géographique maître |
 | DVF (Demande de Valeurs Foncières) | data.gouv.fr | CSV/API | Commune / transaction | date, prix, surface, type de bien, pièces, adresse | Analyse du marché immobilier |
 | Données démographiques | INSEE | CSV/API | Commune / année | population, revenu médian, ménages, chômage | Contextualisation socio-éco |
 | DPE Logements | ADEME | API/CSV | Commune / logement | classe énergie, classe GES, conso, émissions, type bâtiment | Analyse énergétique |
@@ -135,6 +135,8 @@ flowchart TD
 - Les DAGs d'ingestion utilisent aujourd'hui surtout des **sources publiques gouvernementales** qui génèrent des Giga-octets d'informations.
 - Les avis texte restent une **source à ajouter ou à fournir manuellement** pour le job de sentiment.
 - La collecte se sépare radicalement du traitement pour ne pas créer de goulots d'étranglement (stockage objet first).
+- Le référentiel communes est comparé au COG courant de l'Insee pour distinguer les codes actifs des codes historiques, associés ou délégués.
+- Un rapport QA de source est écrit dans MinIO pour tracer les écarts bruts, les doublons et les années couvertes.
 
 ---
 

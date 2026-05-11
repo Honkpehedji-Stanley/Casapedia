@@ -173,3 +173,5 @@ Il utilise une régression linéaire Spark MLlib, donc un modèle classique et i
 - `ML_predictions.py` lit les données immobilières curées et construit un modèle qui prédit le prix au m².
 
 Les deux jobs lisent leurs données dans MinIO et écrivent leurs résultats dans MinIO.
+
+Note opérationnelle: le job de nettoyage tabulaire journalise aussi les années vues dans DVF et DPE, fixe le millésime INSEE au moment du traitement, et écrit un petit rapport QA sur les communes dans MinIO pour séparer les codes actifs du COG courant des codes historiques ou non courants.
