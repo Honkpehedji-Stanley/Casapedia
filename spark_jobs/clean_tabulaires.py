@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, concat, lit, lpad, trim
+from pyspark.sql.functions import col, concat, countDistinct, lit, lpad, sum as spark_sum, trim, when
 
 AIRFLOW_HOME = Path(__file__).resolve().parents[1]
 if str(AIRFLOW_HOME) not in sys.path:
@@ -20,8 +20,6 @@ from io import BytesIO
 from storage.minio_utils import download_to_path, ensure_bucket, get_minio_client, get_minio_settings, upload_fileobj
 
 S3_BUCKET = os.getenv("CASAPEDIA_S3_BUCKET", "casapedia-datalake")
-RAW_DIR = f"s3a://{S3_BUCKET}/raw"
-PROCESSED_DIR = f"s3a://{S3_BUCKET}/processed"
 SHARED_WORK_DIR = AIRFLOW_HOME / "spark_jobs" / "_work" / "clean_tabulaires"
 COG_COMMUNE_URL = os.getenv(
     "CASAPEDIA_COG_COMMUNES_URL",
@@ -134,6 +132,58 @@ def build_commune_qa_report(df_communes_source, df_communes_clean, active_commun
         }
     }
 
+
+def build_commune_rollups(df_communes_clean, active_codes_df):
+    df_communes_status = df_communes_clean.join(active_codes_df, on="code_insee", how="left")
+    df_communes_status = df_communes_status.withColumn("is_active_cog", col("active_flag").isNotNull())
+
+    def aggregate_rollup(level_name, grouping_columns):
+        grouped = df_communes_status.groupBy(*grouping_columns).agg(
+            countDistinct("code_insee").alias("commune_count"),
+            spark_sum(when(col("is_active_cog"), 1).otherwise(0)).cast("int").alias("active_commune_count"),
+            spark_sum(when(~col("is_active_cog"), 1).otherwise(0)).cast("int").alias("historical_commune_count"),
+        )
+
+        return grouped.select(
+            lit(level_name).alias("niveau"),
+            *grouping_columns,
+            "commune_count",
+            "active_commune_count",
+            "historical_commune_count",
+        )
+
+    departements = aggregate_rollup(
+        "departement",
+        [
+            "dept",
+            "dept_name",
+        ],
+    )
+
+    regions = aggregate_rollup(
+        "region",
+        [
+            "region_code",
+            "region",
+        ],
+    )
+
+    national = df_communes_status.groupBy().agg(
+        countDistinct("code_insee").alias("commune_count"),
+        spark_sum(when(col("is_active_cog"), 1).otherwise(0)).cast("int").alias("active_commune_count"),
+        spark_sum(when(~col("is_active_cog"), 1).otherwise(0)).cast("int").alias("historical_commune_count"),
+    ).select(
+        lit("national").alias("niveau"),
+        lit("FR").alias("code_niveau"),
+        lit("France").alias("libelle_niveau"),
+        "commune_count",
+        "active_commune_count",
+        "historical_commune_count",
+    )
+
+    return departements, regions, national
+
+
 def main():
     print("Initialisation de SparkSession...")
     spark = SparkSession.builder \
@@ -158,12 +208,19 @@ def main():
             col("latitude").cast("double").alias("latitude"),
             col("longitude").cast("double").alias("longitude"),
             trim(col("code_departement")).alias("dept"),
+            trim(col("nom_departement")).alias("dept_name"),
+            trim(col("code_region")).alias("region_code"),
             trim(col("nom_region")).alias("region")
         ).dropDuplicates(["code_insee"])
 
         active_commune_codes, cog_type_counts = load_current_cog_commune_codes()
+        active_codes_df = df_communes_clean.sparkSession.createDataFrame(
+            [(code, 1) for code in active_commune_codes],
+            ["code_insee", "active_flag"],
+        )
         communes_count = df_communes_clean.count()
         commune_qa_report = build_commune_qa_report(df_communes, df_communes_clean, active_commune_codes, cog_type_counts)
+        departement_rollups, region_rollups, national_rollup = build_commune_rollups(df_communes_clean, active_codes_df)
 
         print(f"Nombre d'entrées communes distinctes dans la source: {communes_count}")
         print(f"Nombre de lignes communes brutes dans le fichier source: {df_communes.count()}")
@@ -179,6 +236,9 @@ def main():
         )
 
         write_jsonl_to_minio(df_communes_clean, "processed/communes", "communes.jsonl")
+        write_jsonl_to_minio(departement_rollups, "processed/communes_rollups", "departements.jsonl")
+        write_jsonl_to_minio(region_rollups, "processed/communes_rollups", "regions.jsonl")
+        write_jsonl_to_minio(national_rollup, "processed/communes_rollups", "national.jsonl")
         write_json_to_minio(commune_qa_report, "processed/qa", "source_qa.json")
 
         # 2. Traitement DVF (Valeurs Foncières)
