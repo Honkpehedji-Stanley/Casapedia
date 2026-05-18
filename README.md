@@ -32,10 +32,10 @@ L'application permet aux utilisateurs de :
 - Tableaux statistiques détaillés
 - Cartes géographiques interactives avec plusieurs modes de représentation
 - Graphiques dynamiques et personnalisables
-- Nuages de mots pour l'analyse de sentiment
+- Fil d'actualité des avis nettoyés avec note, source et thème métier
 
 **Traitement du langage naturel**
-- Analyse de sentiment sur les commentaires et descriptions de villes
+- Nettoyage et normalisation des avis pour exploitation en base
 - Extraction d'informations qualitatives sur la sécurité, le cadre de vie et les services
 
 ## Cas d'usage
@@ -90,7 +90,8 @@ Casapedia/
 │   ├── pg_manager.py        # Gestionnaire PostgreSQL
 │   └── mongo_manager.py     # Gestionnaire MongoDB
 ├── spark_jobs/              # Scripts de transformation Big Data
-│   └── clean_tabulaires.py  # (en construction)
+│   ├── clean_tabulaires.py  # Nettoyage tabulaire et QA source
+│   └── clean_reviews.py     # Nettoyage des avis bruts
 ├── frontend_app/            # Interface Streamlit (à venir)
 ├── docker-compose.yml       # Infrastructure (Airflow, Spark, Postgres, Mongo)
 ├── .env                     # Configuration environnement
@@ -179,7 +180,7 @@ Pour que l'orchestrateur puisse soumettre des jobs au cluster Spark, ajoutez une
 
 **4. Lancer les DAGs ELT (Collecte & Transformation)**
 1. **Activer le DAG `1_ingestion_raw_data`** : Télécharge les fichiers bruts dans le bucket MinIO `casapedia-datalake/raw/`.
-2. **Activer le DAG `2_transform_spark_data`** : Lisse les données et soumet le job `clean_tabulaires.py` au cluster Spark. Génère les formats consolidés compressés (Parquet) dans le bucket MinIO `casapedia-datalake/processed/`.
+2. **Activer le DAG `2_transform_spark_data`** : Nettoie les données tabulaires et les avis bruts via `clean_tabulaires.py` et `clean_reviews.py`, puis écrit les jeux de données curés dans `casapedia-datalake/processed/`.
 
 **5. Documentation détaillée**
 Pour comprendre l'architecture Big Data complète, veuillez vous référer au fichier détaillé `CASAPEDIA_DOC.md`.

@@ -136,6 +136,12 @@ def build_commune_qa_report(df_communes_source, df_communes_clean, active_commun
 def build_commune_rollups(df_communes_clean, active_codes_df):
     df_communes_status = df_communes_clean.join(active_codes_df, on="code_insee", how="left")
     df_communes_status = df_communes_status.withColumn("is_active_cog", col("active_flag").isNotNull())
+    df_communes_status = df_communes_status.na.fill({
+        "dept": "inconnu",
+        "dept_name": "Inconnu",
+        "region_code": "inconnu",
+        "region": "Inconnu",
+    })
 
     def aggregate_rollup(level_name, grouping_columns):
         grouped = df_communes_status.groupBy(*grouping_columns).agg(
