@@ -3,6 +3,8 @@ import json
 import tempfile
 import zipfile
 import sys
+import struct
+import zlib
 from collections import Counter
 from csv import DictReader
 from pathlib import Path
@@ -62,6 +64,65 @@ def write_json_to_minio(payload, output_prefix, filename):
     print(f"Rapport QA écrit dans : s3a://{bucket}/{object_key}")
 
 
+def extract_archive_members(source_path, destination_dir):
+    extracted_paths = []
+
+    try:
+        with zipfile.ZipFile(source_path, "r") as archive:
+            archive.extractall(destination_dir)
+            for member_name in archive.namelist():
+                extracted_paths.append(os.path.join(destination_dir, member_name))
+        return extracted_paths
+    except zipfile.BadZipFile:
+        pass
+
+    with open(source_path, "rb") as handle:
+        content = handle.read()
+
+    offset = 0
+    while True:
+        header_offset = content.find(b"PK\x03\x04", offset)
+        if header_offset < 0:
+            break
+
+        header = struct.unpack("<IHHHHHIIIHH", content[header_offset:header_offset + 30])
+        _, _, _, compression, _, _, _, _, _, filename_len, extra_len = header
+        filename = content[header_offset + 30:header_offset + 30 + filename_len].decode("utf-8", "replace")
+        data_start = header_offset + 30 + filename_len + extra_len
+        next_header_offset = content.find(b"PK\x03\x04", data_start)
+        if next_header_offset < 0:
+            next_header_offset = len(content)
+
+        segment = content[data_start:next_header_offset]
+        data_descriptor_offset = segment.rfind(b"PK\x07\x08")
+        if data_descriptor_offset >= 0 and len(segment) - data_descriptor_offset <= 20:
+            segment = segment[:data_descriptor_offset]
+
+        if compression == 8:
+            try:
+                raw_content = zlib.decompress(segment, -15)
+            except zlib.error:
+                raw_content = zlib.decompressobj(-15).decompress(segment)
+        else:
+            raw_content = segment
+
+        local_path = os.path.join(destination_dir, filename)
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        with open(local_path, "wb") as output_file:
+            output_file.write(raw_content)
+        extracted_paths.append(local_path)
+        offset = next_header_offset
+
+    return extracted_paths
+
+
+def first_csv_path(directory_path):
+    csv_candidates = sorted(Path(directory_path).rglob("*.csv"))
+    if not csv_candidates:
+        raise FileNotFoundError(f"Aucun CSV trouvé dans {directory_path}")
+    return str(csv_candidates[0])
+
+
 def load_current_cog_commune_codes():
     current_codes = set()
     type_counts = Counter()
@@ -82,7 +143,14 @@ def load_current_cog_commune_codes():
 
 
 def print_year_coverage(df, date_column, label):
-    years = [row[0] for row in df.selectExpr(f"substring({date_column}, 1, 4) as annee").where("annee is not null and annee <> ''").distinct().orderBy("annee").collect()]
+    years = [
+        row[0]
+        for row in df.selectExpr(f"substring(cast({date_column} as string), 1, 4) as annee")
+        .where("annee is not null and annee <> ''")
+        .distinct()
+        .orderBy("annee")
+        .collect()
+    ]
     if years:
         print(f"{label} - années présentes: {', '.join(years)}")
     else:
@@ -295,13 +363,19 @@ def main():
 
         write_jsonl_to_minio(df_dpe_clean, "processed/dpe", "dpe.jsonl")
 
-        # 4. Traitement Démographie (INSEE)
-        print("Traitement de demographie_insee.zip (extraction préalable)...")
-        local_zip_path = os.path.join(temp_dir, "demographie_insee.zip")
+        # 4. Traitement Démographie et contexte territorial (INSEE + data.gouv)
+        print("Traitement des données INSEE complémentaires...")
         local_extract_dir = os.path.join(temp_dir, "extract")
         os.makedirs(local_extract_dir, exist_ok=True)
 
+        source_qa = {
+            "sources": []
+        }
+
         try:
+            # 4.1 Population communale
+            print("Traitement de demographie_insee.zip (population communale)...")
+            local_zip_path = os.path.join(temp_dir, "demographie_insee.zip")
             download_raw_object("raw/insee/demographie_insee.zip", local_zip_path)
             os.chmod(local_zip_path, 0o644)
 
@@ -317,23 +391,227 @@ def main():
                 col("PMUN").cast("int").alias("population")
             ).withColumn("annee", lit(2023))
 
-            print(f"INSEE - lignes sources: {df_insee.count()}")
-            print("INSEE - année de traitement fixée par le job: 2023")
+            print(f"INSEE population - lignes sources: {df_insee.count()}")
+            print("INSEE population - année de traitement fixée par le job: 2023")
 
             write_jsonl_to_minio(df_insee_clean.dropna(subset=["commune_id", "population"]), "processed/demographics", "demographics.jsonl")
+            source_qa["sources"].append({
+                "file": "raw/insee/demographie_insee.zip",
+                "processed_year": 2023,
+                "note": "Population communale du fichier INSEE de référence; le millésime est fixé explicitement au traitement.",
+            })
+
+            # 4.2 Densité communale
+            print("Traitement de densite_population_communes.csv (densité communale)...")
+            local_density_path = os.path.join(temp_dir, "densite_population_communes.csv")
+            download_raw_object("raw/insee/densite_population_communes.csv", local_density_path)
+            os.chmod(local_density_path, 0o644)
+
+            df_density = spark.read.csv(local_density_path, header=True, sep=",")
+            df_density_clean = df_density.select(
+                col("annee").cast("int").alias("annee"),
+                lpad(trim(col("code_com")), 5, "0").alias("commune_id"),
+                trim(col("nom_territoire")).alias("nom_territoire"),
+                col("valeur").cast("double").alias("densite_population"),
+                col("numerateur").cast("double").alias("numerateur"),
+                col("denominateur").cast("double").alias("denominateur"),
+            )
+            print(f"Densité - lignes sources: {df_density.count()}")
+            print_year_coverage(df_density, "annee", "Densité")
+            write_jsonl_to_minio(df_density_clean.dropna(subset=["commune_id"]), "processed/demographics", "density.jsonl")
+            source_qa["sources"].append({
+                "file": "raw/insee/densite_population_communes.csv",
+                "processed_year": "2021",
+                "note": "Densité de population par commune issue de data.gouv / INSEE; la source porte son année dans la colonne annee.",
+            })
+
+            # 4.3 Chômage / population active
+            print("Traitement de population_active_chomage_2022.zip (population active et chômage)...")
+            local_unemployment_path = os.path.join(temp_dir, "population_active_chomage_2022.zip")
+            local_unemployment_extract_dir = os.path.join(temp_dir, "unemployment_extract")
+            os.makedirs(local_unemployment_extract_dir, exist_ok=True)
+            download_raw_object("raw/insee/population_active_chomage_2022.zip", local_unemployment_path)
+            os.chmod(local_unemployment_path, 0o644)
+
+            extract_archive_members(local_unemployment_path, local_unemployment_extract_dir)
+            unemployment_csv_path = first_csv_path(local_unemployment_extract_dir)
+            df_unemployment = spark.read.csv(unemployment_csv_path, header=True, sep=";")
+            df_unemployment_clean = df_unemployment.select(
+                trim(col("GEO")).alias("commune_id"),
+                trim(col("GEO_OBJECT")).alias("geo_object"),
+                trim(col("EMPSTA_ENQ")).alias("statut_emploi"),
+                trim(col("AGE")).alias("age"),
+                trim(col("PCS")).alias("pcs"),
+                trim(col("RP_MEASURE")).alias("mesure"),
+                trim(col("FREQ")).alias("frequence"),
+                col("TIME_PERIOD").cast("int").alias("annee"),
+                col("OBS_VALUE").cast("double").alias("valeur")
+            )
+            df_unemployment_communes = df_unemployment_clean.where(
+                (col("geo_object") == "COM") &
+                (col("age") == "Y15T64") &
+                (col("pcs") == "_T") &
+                (col("frequence") == "A") &
+                (col("mesure") == "POP") &
+                (col("statut_emploi").isin("1T2", "2"))
+            )
+
+            taux_chomage = df_unemployment_communes.groupBy("commune_id", "annee").pivot("statut_emploi", ["1T2", "2"]).agg(spark_sum("valeur")).na.fill(0)
+            taux_chomage = taux_chomage.select(
+                col("commune_id"),
+                col("annee"),
+                col("1T2").alias("actifs_15_64"),
+                col("2").alias("chomeurs_15_64"),
+            ).withColumn(
+                "taux_chomage",
+                when(col("actifs_15_64") > 0, col("chomeurs_15_64") / col("actifs_15_64")).otherwise(None)
+            )
+            print(f"Chômage - lignes sources: {df_unemployment.count()}")
+            print_year_coverage(df_unemployment, "TIME_PERIOD", "Chômage")
+            write_jsonl_to_minio(taux_chomage.dropna(subset=["commune_id"]), "processed/demographics", "chomage_commune.jsonl")
+            source_qa["sources"].append({
+                "file": "raw/insee/population_active_chomage_2022.zip",
+                "processed_year": 2022,
+                "note": "Taux de chômage calculé comme chômeurs / actifs 15-64 ans à partir des indicateurs POP du fichier INSEE.",
+            })
+
+            # 4.4 Revenu disponible des ménages
+            print("Traitement de revenu_disponible_menages_2023.zip (revenu disponible)...")
+            local_revenue_path = os.path.join(temp_dir, "revenu_disponible_menages_2023.zip")
+            local_revenue_extract_dir = os.path.join(temp_dir, "revenue_extract")
+            os.makedirs(local_revenue_extract_dir, exist_ok=True)
+            download_raw_object("raw/insee/revenu_disponible_menages_2023.zip", local_revenue_path)
+            os.chmod(local_revenue_path, 0o644)
+
+            extract_archive_members(local_revenue_path, local_revenue_extract_dir)
+            revenue_csv_path = first_csv_path(local_revenue_extract_dir)
+            df_revenue = spark.read.csv(revenue_csv_path, header=True, sep=";")
+            df_revenue_clean = df_revenue.select(
+                trim(col("AGE")).alias("age"),
+                trim(col("ERFS_MEASURE")).alias("mesure"),
+                trim(col("NB_PERS")).alias("nb_pers"),
+                trim(col("NCH")).alias("nch"),
+                trim(col("PCS")).alias("pcs"),
+                trim(col("TPH")).alias("tph"),
+                trim(col("OBS_STATUS")).alias("statut_obs"),
+                trim(col("UNIT_MEASURE")).alias("unite_mesure"),
+                trim(col("UNIT_MULT")).alias("unite_mult"),
+                col("TIME_PERIOD").cast("int").alias("annee"),
+                col("OBS_VALUE").cast("double").alias("valeur")
+            )
+            revenu_median = df_revenue_clean.where(col("mesure") == "MED_DI")
+            print(f"Revenu disponible - lignes sources: {df_revenue.count()}")
+            print_year_coverage(df_revenue, "TIME_PERIOD", "Revenu disponible")
+            write_jsonl_to_minio(df_revenue_clean, "processed/demographics", "revenu_disponible.jsonl")
+            source_qa["sources"].append({
+                "file": "raw/insee/revenu_disponible_menages_2023.zip",
+                "processed_year": 2023,
+                "note": "Revenu disponible des ménages à un niveau agrégé ménages/territoires; la source ne porte pas un code commune comme les autres fichiers communaux.",
+            })
+
+            # 4.5 Base permanente des équipements (BPE)
+            print("Traitement de bpe_2024.zip (équipements et services)...")
+            local_bpe_path = os.path.join(temp_dir, "bpe_2024.zip")
+            local_bpe_extract_dir = os.path.join(temp_dir, "bpe_extract")
+            os.makedirs(local_bpe_extract_dir, exist_ok=True)
+            download_raw_object("raw/infrastructure/bpe_2024.zip", local_bpe_path)
+            os.chmod(local_bpe_path, 0o644)
+
+            extract_archive_members(local_bpe_path, local_bpe_extract_dir)
+            bpe_data_path = os.path.join(local_bpe_extract_dir, "DS_BPE_2024_data.csv")
+            bpe_metadata_path = os.path.join(local_bpe_extract_dir, "DS_BPE_2024_metadata.csv")
+            df_bpe = spark.read.csv(bpe_data_path, header=True, sep=";")
+            df_bpe_metadata = spark.read.csv(bpe_metadata_path, header=True, sep=";")
+
+            bpe_meta_dom = df_bpe_metadata.where(col("COD_VAR") == "FACILITY_DOM").select(
+                trim(col("COD_MOD")).alias("FACILITY_DOM"),
+                trim(col("LIB_MOD")).alias("facility_dom_label"),
+            )
+            bpe_meta_sdom = df_bpe_metadata.where(col("COD_VAR") == "FACILITY_SDOM").select(
+                trim(col("COD_MOD")).alias("FACILITY_SDOM"),
+                trim(col("LIB_MOD")).alias("facility_sdom_label"),
+            )
+            bpe_meta_type = df_bpe_metadata.where(col("COD_VAR") == "FACILITY_TYPE").select(
+                trim(col("COD_MOD")).alias("FACILITY_TYPE"),
+                trim(col("LIB_MOD")).alias("facility_type_label"),
+            )
+
+            df_bpe_clean = df_bpe.select(
+                trim(col("GEO")).alias("geo"),
+                trim(col("GEO_OBJECT")).alias("geo_object"),
+                trim(col("FACILITY_DOM")).alias("facility_dom"),
+                trim(col("FACILITY_SDOM")).alias("facility_sdom"),
+                trim(col("FACILITY_TYPE")).alias("facility_type"),
+                trim(col("BPE_MEASURE")).alias("bpe_measure"),
+                col("TIME_PERIOD").cast("int").alias("annee"),
+                col("OBS_VALUE").cast("double").alias("valeur")
+            )
+
+            df_bpe_labeled = df_bpe_clean \
+                .join(bpe_meta_dom, on="facility_dom", how="left") \
+                .join(bpe_meta_sdom, on="facility_sdom", how="left") \
+                .join(bpe_meta_type, on="facility_type", how="left")
+
+            df_bpe_rollup = df_bpe_labeled.groupBy(
+                "annee",
+                "geo",
+                "geo_object",
+                "facility_dom",
+                "facility_dom_label",
+                "facility_sdom",
+                "facility_sdom_label",
+            ).agg(
+                spark_sum("valeur").alias("equipements_total")
+            )
+
+            print(f"BPE - lignes sources: {df_bpe.count()}")
+            print_year_coverage(df_bpe, "TIME_PERIOD", "BPE")
+            write_jsonl_to_minio(df_bpe_labeled, "processed/infrastructure", "bpe_equipment.jsonl")
+            write_jsonl_to_minio(df_bpe_rollup, "processed/infrastructure", "bpe_rollups.jsonl")
+            source_qa["sources"].append({
+                "file": "raw/infrastructure/bpe_2024.zip",
+                "processed_year": 2024,
+                "note": "Dénombrement BPE communal et géolocalisé couvrant services, commerces, enseignement, santé, transports, sports et culture.",
+            })
+
+            # 4.6 Évolution BPE
+            print("Traitement de bpe_evolution_2019_2024.zip (évolution des équipements)...")
+            local_bpe_evolution_path = os.path.join(temp_dir, "bpe_evolution_2019_2024.zip")
+            local_bpe_evolution_extract_dir = os.path.join(temp_dir, "bpe_evolution_extract")
+            os.makedirs(local_bpe_evolution_extract_dir, exist_ok=True)
+            download_raw_object("raw/infrastructure/bpe_evolution_2019_2024.zip", local_bpe_evolution_path)
+            os.chmod(local_bpe_evolution_path, 0o644)
+
+            extract_archive_members(local_bpe_evolution_path, local_bpe_evolution_extract_dir)
+            bpe_evolution_data_path = first_csv_path(local_bpe_evolution_extract_dir)
+            if os.path.exists(bpe_evolution_data_path):
+                df_bpe_evolution = spark.read.csv(bpe_evolution_data_path, header=True, sep=";")
+                df_bpe_evolution_clean = df_bpe_evolution.select(
+                    trim(col("GEO")).alias("geo"),
+                    trim(col("GEO_OBJECT")).alias("geo_object"),
+                    trim(col("FACILITY_TYPE")).alias("facility_type"),
+                    trim(col("BPE_MEASURE")).alias("bpe_measure"),
+                    col("TIME_PERIOD").cast("int").alias("annee"),
+                    col("OBS_VALUE").cast("double").alias("valeur")
+                )
+                print(f"BPE évolution - lignes sources: {df_bpe_evolution.count()}")
+                print_year_coverage(df_bpe_evolution, "TIME_PERIOD", "BPE évolution")
+                write_jsonl_to_minio(df_bpe_evolution_clean, "processed/infrastructure", "bpe_evolution.jsonl")
+                source_qa["sources"].append({
+                    "file": "raw/infrastructure/bpe_evolution_2019_2024.zip",
+                    "processed_year": 2024,
+                    "note": "Présence ou absence d'équipement par commune sur la période 2019-2024.",
+                })
+            else:
+                print("BPE évolution introuvable après extraction, ingestion passée.")
+
             write_json_to_minio(
-                {
-                    "source": {
-                        "file": "raw/insee/demographie_insee.zip",
-                        "processed_year": 2023,
-                        "note": "Le millésime n'est pas porté explicitement par le fichier brut; le job l'attache au moment du traitement.",
-                    }
-                },
+                source_qa,
                 "processed/qa",
                 "insee_source_qa.json",
             )
-        except Exception:
-            print("Fichier INSEE introuvable, ingestion passée.")
+        except Exception as error:
+            print(f"Données INSEE complémentaires introuvables ou incomplètes: {error}")
         
     print("Traitement Big Data PySpark terminé avec succès !")
     spark.stop()

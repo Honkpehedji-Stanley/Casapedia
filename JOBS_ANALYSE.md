@@ -64,44 +64,67 @@ Ce job apprend à prédire le prix au m² à partir des données immobilières d
 
 Par défaut, il lit ces jeux de données déjà nettoyés:
 
-- `s3a://casapedia-datalake/processed/transactions`
-- `s3a://casapedia-datalake/processed/communes`
-- `s3a://casapedia-datalake/processed/demographics`
-- `s3a://casapedia-datalake/processed/dpe`
+- `s3a://casapedia-datalake/processed/transactions/transactions.jsonl`
+- `s3a://casapedia-datalake/processed/communes/communes.jsonl`
+- `s3a://casapedia-datalake/processed/demographics/demographics.jsonl`
+- `s3a://casapedia-datalake/processed/demographics/density.jsonl`
+- `s3a://casapedia-datalake/processed/demographics/chomage_commune.jsonl`
+- `s3a://casapedia-datalake/processed/dpe/dpe.jsonl`
 
 ### Ce que le job fait exactement
 
-1. Il lance une session Spark.
-2. Il charge les tables curées depuis MinIO.
-3. Il prend les transactions comme base principale.
-4. Il garde les lignes où `prix_m2` est défini et strictement positif.
-5. Il récupère pour chaque commune les coordonnées géographiques depuis la table communes.
-6. Il récupère la population depuis la table démographie.
-7. Il essaye aussi de récupérer des indicateurs DPE par commune:
-   - moyenne des émissions de CO2,
-   - moyenne de consommation d'énergie,
-   - volume de logements DPE.
-8. Si la table DPE n'est pas disponible ou ne peut pas être lue, le job continue avec des valeurs vides pour cette partie.
-9. Il construit une base d'entraînement en combinant toutes ces sources.
-10. Il extrait deux variables de temps:
-    - l'année de transaction,
-    - le mois de transaction.
-11. Il prépare la partie numérique avec un `Imputer` pour remplacer les valeurs manquantes.
-12. Il transforme la variable catégorielle `type_bien` avec:
-    - `StringIndexer`,
-    - puis `OneHotEncoder`.
-13. Il assemble toutes les variables en un seul vecteur de caractéristiques.
-14. Il entraîne une régression linéaire pour prédire `prix_m2`.
-15. Il coupe les données en deux parties:
-    - 80 % pour l'entraînement,
-    - 20 % pour le test.
-16. Il applique le modèle sur la partie test.
-17. Il récupère les prédictions finales.
-18. Il calcule les métriques du modèle:
-    - `rmse`,
-    - `mae`,
-    - `r2`.
-19. Il sauvegarde aussi le modèle entraîné.
+1. Il lance une session Spark et lit les fichiers JSONL curés depuis MinIO.
+2. Il prend `transactions` comme table principale, parce que c'est elle qui porte la cible `prix_m2`.
+3. Il écarte les lignes inutilisables, notamment celles où `prix_m2` est nul, négatif ou absent.
+4. Il ajoute les variables de contexte par jointure sur `commune_id`:
+   - coordonnées depuis `communes`,
+   - population depuis `demographics`,
+   - densité depuis `density`,
+   - chômage depuis `chomage_commune`,
+   - agrégats DPE depuis `dpe`.
+5. Il construit les variables temporelles `transaction_year` et `transaction_month` à partir de `date_transaction`.
+6. Il transforme les champs numériques avec un `Imputer` pour remplacer les valeurs manquantes par une valeur cohérente calculée sur le train.
+7. Il encode `type_bien` avec `StringIndexer` puis `OneHotEncoder`, afin que Spark puisse utiliser cette catégorie dans une régression.
+8. Il assemble toutes les colonnes explicatives dans un seul vecteur `features`.
+9. Il sépare les données en deux jeux:
+   - 80 % pour l'entraînement,
+   - 20 % pour le test.
+10. Il entraîne un modèle de régression linéaire pour apprendre la relation entre les variables explicatives et `prix_m2`.
+11. Il applique le modèle sur le jeu de test pour obtenir `predicted_prix_m2`.
+12. Il calcule les métriques de qualité:
+   - `rmse` mesure l'erreur moyenne au carré,
+   - `mae` mesure l'erreur moyenne absolue,
+   - `r2` mesure la part de variance expliquée.
+13. Il sauvegarde enfin les prédictions, les métriques et le modèle entraîné dans MinIO.
+
+### Pourquoi cette approche
+
+Le choix de la régression linéaire est volontaire: il donne un modèle simple à relire, rapide à entraîner et facile à expliquer.
+
+Le but n'est pas de prédire un prix futur magique, mais d'estimer le prix au m² attendu d'un bien à partir des caractéristiques observées dans l'historique. Le modèle compare donc toujours du réel connu à du prédit sur des données passées, ce qui permet de juger sa qualité.
+
+### Lecture du résultat
+
+À la fin, une ligne de prédiction contient notamment:
+
+- la commune,
+- la date de transaction,
+- le type de bien,
+- la surface,
+- le prix réel,
+- le prix réel au m²,
+- le prix au m² prédit,
+- la population,
+- la densité,
+- le taux de chômage,
+- les indicateurs DPE.
+
+Ces sorties servent ensuite à faire:
+
+- des comparaisons réel vs prédit sur l'historique,
+- des cartes par territoire,
+- des courbes d'erreur du modèle,
+- des vues de contexte autour du marché immobilier.
 
 ### Ce que le job écrit
 
@@ -127,7 +150,7 @@ Il utilise une régression linéaire Spark MLlib, donc un modèle classique et i
 ## 4. Résumé très simple
 
 - `clean_reviews.py` lit les reviews brutes et les normalise pour la base de données.
-- `ML_predictions.py` lit les données immobilières curées et construit un modèle qui prédit le prix au m².
+- `ML_predictions.py` lit les données immobilières curées, ajoute les variables de contexte utiles et construit un modèle qui prédit le prix au m².
 
 Les deux jobs lisent leurs données dans MinIO et écrivent leurs résultats dans MinIO.
 

@@ -15,21 +15,32 @@ def write_clean_parquet(df, path):
 
 
 def main():
-    transactions_path = os.environ.get("CASAPEDIA_TRANSACTIONS_INPUT", f"{PROCESSED_DIR}/transactions")
-    communes_path = os.environ.get("CASAPEDIA_COMMUNES_INPUT", f"{PROCESSED_DIR}/communes")
-    demographics_path = os.environ.get("CASAPEDIA_DEMOGRAPHICS_INPUT", f"{PROCESSED_DIR}/demographics")
-    dpe_path = os.environ.get("CASAPEDIA_DPE_INPUT", f"{PROCESSED_DIR}/dpe")
+    transactions_path = os.environ.get("CASAPEDIA_TRANSACTIONS_INPUT", f"{PROCESSED_DIR}/transactions/transactions.jsonl")
+    communes_path = os.environ.get("CASAPEDIA_COMMUNES_INPUT", f"{PROCESSED_DIR}/communes/communes.jsonl")
+    demographics_path = os.environ.get("CASAPEDIA_DEMOGRAPHICS_INPUT", f"{PROCESSED_DIR}/demographics/demographics.jsonl")
+    density_path = os.environ.get("CASAPEDIA_DENSITY_INPUT", f"{PROCESSED_DIR}/demographics/density.jsonl")
+    unemployment_path = os.environ.get("CASAPEDIA_CHOMAGE_INPUT", f"{PROCESSED_DIR}/demographics/chomage_commune.jsonl")
+    dpe_path = os.environ.get("CASAPEDIA_DPE_INPUT", f"{PROCESSED_DIR}/dpe/dpe.jsonl")
     output_root = os.environ.get("CASAPEDIA_ML_OUTPUT", f"{PROCESSED_DIR}/ml_predictions")
 
     print("Initialisation de SparkSession pour le job ML...")
     spark = SparkSession.builder.appName("Casapedia_ML_Predictions").getOrCreate()
 
-    transactions = spark.read.parquet(transactions_path)
-    communes = spark.read.parquet(communes_path)
-    demographics = spark.read.parquet(demographics_path)
+    transactions = spark.read.json(transactions_path)
+    communes = spark.read.json(communes_path)
+    demographics = spark.read.json(demographics_path)
+
+    def read_optional_json(path, schema_definition):
+        try:
+            return spark.read.json(path)
+        except Exception:
+            return spark.createDataFrame([], schema_definition)
+
+    density = read_optional_json(density_path, "commune_id string, densite_population double")
+    unemployment = read_optional_json(unemployment_path, "commune_id string, taux_chomage double")
 
     try:
-        dpe = spark.read.parquet(dpe_path)
+        dpe = spark.read.json(dpe_path)
         dpe_agg = dpe.groupBy("commune_id").agg(
             avg("emissions_co2").alias("avg_emissions_co2"),
             avg("consommation_energie").alias("avg_consumption_energie"),
@@ -49,6 +60,20 @@ def main():
         col("population").cast("double").alias("population"),
     )
 
+    density_features = density.select(
+        trim(col("commune_id")).alias("commune_id"),
+        col("densite_population").cast("double").alias("densite_population"),
+    ).groupBy("commune_id").agg(
+        avg("densite_population").alias("densite_population"),
+    )
+
+    unemployment_features = unemployment.select(
+        trim(col("commune_id")).alias("commune_id"),
+        col("taux_chomage").cast("double").alias("taux_chomage"),
+    ).groupBy("commune_id").agg(
+        avg("taux_chomage").alias("taux_chomage"),
+    )
+
     training_base = transactions.select(
         trim(col("commune_id")).alias("commune_id"),
         coalesce(
@@ -66,6 +91,8 @@ def main():
 
     training = training_base.join(communes_features, on="commune_id", how="left") \
         .join(demographics_features, on="commune_id", how="left") \
+        .join(density_features, on="commune_id", how="left") \
+        .join(unemployment_features, on="commune_id", how="left") \
         .join(dpe_agg, on="commune_id", how="left")
 
     training = training.withColumn("transaction_year", year(col("date_transaction"))) \
@@ -77,6 +104,8 @@ def main():
         "latitude",
         "longitude",
         "population",
+        "densite_population",
+        "taux_chomage",
         "avg_emissions_co2",
         "avg_consumption_energie",
         "dpe_volume",
@@ -112,6 +141,8 @@ def main():
         "latitude",
         "longitude",
         "population",
+        "densite_population",
+        "taux_chomage",
         "avg_emissions_co2",
         "avg_consumption_energie",
         "dpe_volume",

@@ -31,6 +31,36 @@ default_args = {
     'retry_delay': timedelta(minutes=5),
 }
 
+REVIEWS_CITY_LIMIT = int(os.getenv('CASAPEDIA_REVIEWS_CITY_LIMIT', '250'))
+VILLE_IDEALE_SEED_PAGES = [
+    'https://www.ville-ideale.fr/',
+    'https://www.ville-ideale.fr/villespardepts.php',
+    'https://www.ville-ideale.fr/classements.php',
+]
+VILLES_A_VIVRE_SEED_PAGES = [
+    'https://www.villesavivre.fr/',
+]
+INSEE_REVENUE_URL = os.getenv(
+    'CASAPEDIA_INSEE_REVENUE_URL',
+    'https://api.insee.fr/melodi/file/DS_ERFS_MENAGE/DS_ERFS_MENAGE_2023_CSV_FR',
+)
+INSEE_UNEMPLOYMENT_URL = os.getenv(
+    'CASAPEDIA_INSEE_UNEMPLOYMENT_URL',
+    'https://api.insee.fr/melodi/file/DS_RP_EMPLOI_LR_COMP/DS_RP_EMPLOI_LR_COMP_2022_CSV_FR',
+)
+INSEE_DENSITY_URL = os.getenv(
+    'CASAPEDIA_INSEE_DENSITY_URL',
+    'https://static.data.gouv.fr/resources/densite-de-population-1/20260414-112014/densite-population-com.csv',
+)
+BPE_2024_URL = os.getenv(
+    'CASAPEDIA_BPE_2024_URL',
+    'https://www.insee.fr/fr/statistiques/fichier/8217527/DS_BPE_CSV_FR.zip',
+)
+BPE_EVOLUTION_URL = os.getenv(
+    'CASAPEDIA_BPE_EVOLUTION_URL',
+    'https://www.insee.fr/fr/statistiques/fichier/8217532/DS_BPE_EVOLUTION_CSV_FR.zip',
+)
+
 def download_file(url, dest_folder, filename):
     """
     Fonction ELT : Téléchargement 'Dumb'.
@@ -117,6 +147,26 @@ def extract_city_links(home_html, base_url, pattern):
     return city_links
 
 
+def collect_city_links(seed_pages, pattern):
+    city_links = []
+    seen_links = set()
+
+    for seed_page in seed_pages:
+        try:
+            page_html = fetch_html(seed_page)
+        except Exception as error:
+            print(f"Page ignorée {seed_page} ({error})")
+            continue
+
+        for city_link in extract_city_links(page_html, seed_page, pattern):
+            if city_link in seen_links:
+                continue
+            seen_links.add(city_link)
+            city_links.append(city_link)
+
+    return city_links
+
+
 def parse_city_name_from_page(page_html):
     match = re.search(r"<h1>([^<]+)</h1>", page_html)
     if not match:
@@ -130,10 +180,8 @@ def parse_city_name_from_page(page_html):
 
 
 def scrape_ville_ideale_reviews():
-    home_url = "https://www.ville-ideale.fr/"
-    home_html = fetch_html(home_url)
-    city_links = extract_city_links(home_html, home_url, r"/[a-z0-9\-]+_[0-9]{5}")
-    city_links = city_links[: int(os.getenv("CASAPEDIA_REVIEWS_CITY_LIMIT", "12"))]
+    city_links = collect_city_links(VILLE_IDEALE_SEED_PAGES, r"/[a-z0-9\-]+_[0-9]{5}")
+    city_links = city_links[:REVIEWS_CITY_LIMIT]
 
     records = []
     criteria_names = [
@@ -200,14 +248,8 @@ def scrape_ville_ideale_reviews():
 
 
 def scrape_villesavivre_reviews():
-    home_url = "https://www.villesavivre.fr/"
-    try:
-        home_html = fetch_html(home_url)
-    except Exception as error:
-        print(f"Villes à Vivre: source indisponible ({error}); aucune review collectée.")
-        return []
-    city_links = extract_city_links(home_html, home_url, r"/[a-z0-9\-]+-[0-9]{5}/")
-    city_links = city_links[: int(os.getenv("CASAPEDIA_REVIEWS_CITY_LIMIT", "12"))]
+    city_links = collect_city_links(VILLES_A_VIVRE_SEED_PAGES, r"/[a-z0-9\-]+-[0-9]{5}/")
+    city_links = city_links[:REVIEWS_CITY_LIMIT]
 
     records = []
 
@@ -276,6 +318,46 @@ def ingest_villesavivre_reviews():
     records = scrape_villesavivre_reviews()
     write_jsonl_to_minio(records, "reviews/villesavivre", "villesavivre_reviews.jsonl")
 
+
+def ingest_insee_revenue():
+    download_file(
+        INSEE_REVENUE_URL,
+        'insee',
+        'revenu_disponible_menages_2023.zip',
+    )
+
+
+def ingest_insee_unemployment():
+    download_file(
+        INSEE_UNEMPLOYMENT_URL,
+        'insee',
+        'population_active_chomage_2022.zip',
+    )
+
+
+def ingest_insee_density():
+    download_file(
+        INSEE_DENSITY_URL,
+        'insee',
+        'densite_population_communes.csv',
+    )
+
+
+def ingest_bpe_2024():
+    download_file(
+        BPE_2024_URL,
+        'infrastructure',
+        'bpe_2024.zip',
+    )
+
+
+def ingest_bpe_evolution():
+    download_file(
+        BPE_EVOLUTION_URL,
+        'infrastructure',
+        'bpe_evolution_2019_2024.zip',
+    )
+
 # Définition du Workflow (DAG)
 with DAG(
     '1_ingestion_raw_data',
@@ -343,5 +425,42 @@ with DAG(
         python_callable=ingest_villesavivre_reviews,
     )
 
+    ingest_insee_revenue_task = PythonOperator(
+        task_id='download_insee_revenue',
+        python_callable=ingest_insee_revenue,
+    )
+
+    ingest_insee_unemployment_task = PythonOperator(
+        task_id='download_insee_unemployment',
+        python_callable=ingest_insee_unemployment,
+    )
+
+    ingest_insee_density_task = PythonOperator(
+        task_id='download_insee_density',
+        python_callable=ingest_insee_density,
+    )
+
+    ingest_bpe_2024_task = PythonOperator(
+        task_id='download_bpe_2024',
+        python_callable=ingest_bpe_2024,
+    )
+
+    ingest_bpe_evolution_task = PythonOperator(
+        task_id='download_bpe_evolution',
+        python_callable=ingest_bpe_evolution,
+    )
+
     # Les 6 téléchargements en PARALLÈLE, pas l'un après l'autre.
-    [ingest_communes, ingest_insee, ingest_dvf, ingest_dpe, ingest_ville_ideale_reviews_task, ingest_villesavivre_reviews_task]
+    [
+        ingest_communes,
+        ingest_insee,
+        ingest_dvf,
+        ingest_dpe,
+        ingest_ville_ideale_reviews_task,
+        ingest_villesavivre_reviews_task,
+        ingest_insee_revenue_task,
+        ingest_insee_unemployment_task,
+        ingest_insee_density_task,
+        ingest_bpe_2024_task,
+        ingest_bpe_evolution_task,
+    ]

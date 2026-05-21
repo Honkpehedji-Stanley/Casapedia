@@ -14,4 +14,6 @@ def get_minio_spark_conf():
         "spark.hadoop.fs.s3a.access.key": access_key,
         "spark.hadoop.fs.s3a.secret.key": secret_key,
         "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
+        "spark.pyspark.python": "/usr/bin/python3.11",
+        "spark.executorEnv.PYSPARK_PYTHON": "/usr/bin/python3.11",
     }

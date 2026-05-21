@@ -10,7 +10,7 @@
 
 - Donner une vue fiable et prédictive des dynamiques immobilières.
 - Traiter d'immenses volumes de données (Big Data) nécessitant des outils à l'échelle.
-- Intégrer l'intelligence artificielle (NLP, sentiment lexical et thèmes) pour analyser des avis non structurés.
+- Préparer les avis textuels pour une exploitation métier fiable, sans surcharger la phase de traitement.
 - Créer des modèles de prédiction sur l'évolution du marché.
 
 ## 2) Architecture technique (Le Pipeline Big Data)
@@ -22,7 +22,7 @@ flowchart TD
     subgraph S1[1. Ingestion & Collecte]
         A["Apache Airflow \n(PythonOperators \n& Requests)"]
         B["APIs Gouvernementales \n(DVF, INSEE, ADEME)"]
-        C["Source textuelle future / manuelle\n(Avis & Textes)"]
+        C["Sources avis\n(ingestion dédiée)"]
         B --> A
         C --> A
     end
@@ -40,7 +40,7 @@ flowchart TD
         SP_M{"Cluster Apache Spark\n(Master / Workers)"}
         P1["PySpark: Nettoyage\n& FillNA massifs"]
         P2["Spark MLlib: \nPrédiction Prix (Regression)"]
-        P3["Spark: Analyse\nde sentiment + thèmes"]
+        P3["Spark: Nettoyage\ndes avis"]
         DL_PRO[("MinIO: PROCESSED\n(Parquet / Delta)")]
         
         DL_RAW -->|Lecture Distribuée| SP_M
@@ -90,24 +90,24 @@ Airflow remplace et transcende le système de scripts Bash (`run_pipeline.sh`). 
 - **Stockage Hybride / Polyglotte** : 
    - **PostgreSQL** : Pour le relationnel à faible latence visuelle (prix au m², taille, infos géographiques).
    - **MongoDB** : Pour l'analyse documentaire (commentaires sur les villes, nuages de mots scalables).
-- **Data Viz UI** : Dashboard Streamlit connecté via Pydeck / Leaflet / MapBox.
+- **Data Viz UI** : phase future, non encore implémentée.
 
 ## 2.2 Architecture de visualisation & Interface
 
-L'accès final pour l'utilisateur se basera sur les résultats de notre traitement lourd, en ne requêtant que les données nécessaires.
+Cette partie reste une cible produit future. Le projet se concentre actuellement sur la curation, la QA et la production des jeux de données dans MinIO.
 
 ```mermaid
 flowchart TD
     %% Bases de données nettoyées et enrichies
     A1[("PostgreSQL\nSpatial & Tabulaire")] --> B["Data Access Layer\n(pandas / sqlalchemy)"]
-    A2[("MongoDB\nIndex Textuel NLP")] --> B
+    A2[("MongoDB\nIndex Textuel")]
 
-    B --> ST{{"Application Streamlit"}}
-    
-    ST --> D["Global & KPIs\n(PySpark Analytics)"]
-    ST --> E["Cartographie Avancée\n(MapBox / Pydeck / Leaflet)"]
-    ST --> F["Exploration NLP\n(WordClouds d'avis citadins)"]
-    
+    B --> ST{{"Application Streamlit (future)"}}
+
+    ST --> D["Global & KPIs"]
+    ST --> E["Cartographie Avancée"]
+    ST --> F["Exploration avis"]
+
     style ST fill:#ffebe6,stroke:#ff4b4b,stroke-width:2px,color:#000
 ```
 
@@ -128,12 +128,12 @@ flowchart TD
 | DVF (Demande de Valeurs Foncières) | data.gouv.fr | CSV/API | Commune / transaction | date, prix, surface, type de bien, pièces, adresse | Analyse du marché immobilier |
 | Données démographiques | INSEE | CSV/API | Commune / année | population, revenu médian, ménages, chômage | Contextualisation socio-éco |
 | DPE Logements | ADEME | API/CSV | Commune / logement | classe énergie, classe GES, conso, émissions, type bâtiment | Analyse énergétique |
-| Avis Citoyens / Reviews | Source future ou ingestion dédiée | JSON/Texte | Ville / Quartier | Texte brut, note / 5, thématiques (Sécurité, Éducation) | Analyse non structurée (IA/NLP) |
+| Avis Citoyens / Reviews | Ville-Idéale, Villes à Vivre | JSON/Texte | Ville / Quartier | Texte brut, note / 5, source, ville/commune | Pré-traitement des avis et base d’actualité |
 
 ### Note importante
 
 - Les DAGs d'ingestion utilisent aujourd'hui surtout des **sources publiques gouvernementales** qui génèrent des Giga-octets d'informations.
-- Les avis texte restent une **source à ajouter ou à fournir manuellement** pour le job de sentiment.
+- Les avis texte sont déjà ingérés via deux sources web, puis simplement nettoyés dans `processed/reviews`.
 - La collecte se sépare radicalement du traitement pour ne pas créer de goulots d'étranglement (stockage objet first).
 - Le référentiel communes est comparé au COG courant de l'Insee pour distinguer les codes actifs des codes historiques, associés ou délégués.
 - Un rapport QA de source est écrit dans MinIO pour tracer les écarts bruts, les doublons et les années couvertes.
@@ -249,14 +249,11 @@ erDiagram
 ```
 **Architecture NoSQL Associée (MongoDB, cible future)**
 - **Collection `reviews`** : Texte source des avis à ingérer plus tard ou à fournir manuellement.
-- **Collection `nlp_sentiments`** : Résultats du traitement lexical de sentiment.
-- **Collection `nlp_themes`** : Thèmes détectés dans les avis.
-- **Collection `nlp_theme_sentiments`** : Agrégats par thème pour expliquer les notes.
+- Les collections de sentiment et de thèmes automatiques ne sont pas actives dans l'état courant du projet.
 
 ## 4.3 Vues analytiques Machine Learning (Spark)
 
 - `model_predict_m2` : Modèle Spark MLlib de régression sur le prix au m².
-- `nlp_wordclouds` : Fréquences de mots pour la génération de nuages de mots par ville.
 
 ---
 
@@ -276,7 +273,7 @@ erDiagram
 ## 5.2 Analyses attendues
 
 - **Prédictions avec IA :** Estimer l'évolution à N+5 ans du m² basé sur le DPE et la démographie locale (Spark MLlib).
-- **Analyse de sentiment et de thèmes :** Génération de scores lexicaux, de thèmes métier et de *WordClouds* d'opinions sur la sécurité, les transports, les écoles ou la propreté.
+- **Analyse des avis :** conservation des avis nettoyés et de la note pour un affichage simple des retours récents.
 - **DataViz Descriptive :** Croisement du DVF avec les revenus pour calculer l'indice d'accessibilité au logement.
 
 ## 5.3 Niveaux de lecture
@@ -319,29 +316,7 @@ erDiagram
 
 ## 7) Comment ce sera organisé (produit + navigation)
 
-## 7.1 Arborescence frontend (MVP)
-
-1. **Dashboard global**
-    - KPI nationaux
-    - tendances clés
-2. **Carte interactive**
-    - exploration géographique
-    - comparaison visuelle immédiate
-3. **Comparateur territorial**
-    - zone A vs zone B
-    - écarts en valeur et en %
-4. **Fiche territoiriale**
-    - synthèse locale complète
-5. **Sources & méthodologie**
-    - transparence des données
-
-## 7.2 Organisation des blocs dans chaque page
-
-- Bandeau KPI
-- Barre de filtres
-- Visualisation principale
-- Tableau détaillé
-- Bloc “Source & définition”
+Cette partie reste une future étape produit. Elle n'est pas encore implémentée.
 
 ---
 
@@ -360,10 +335,10 @@ Casapedia/
 │   ├── mongo_manager.py      # Connecteur pour la base de données NoSQL
 │   └── pg_manager.py         # Connecteur pour PostgreSQL
 ├── spark_jobs/               # Le Cœur du Traitement Haute Performance
-│   ├── clean_tabulaires.py   # Script PySpark pour le FillNA et Map-Reduce global
-│   ├── sentiment_analysis.py # Script Spark lexical pour sentiment, thèmes et wordclouds
+│   ├── clean_tabulaires.py   # Script PySpark pour le nettoyage tabulaire et QA
+│   ├── clean_reviews.py      # Script PySpark pour le nettoyage des avis
 │   └── ML_predictions.py     # Spark MLlib pour prédiction du prix au m²
-├── frontend_app/             # L'App Streamlit interactive
+├── frontend_app/             # Réservé à une phase future
 ├── logs/                     # Fichiers de logs générés par Airflow et Spark
 ├── README.md
 └── requirements.txt
@@ -392,13 +367,13 @@ Casapedia/
 L'objectif n'est pas de sauter directement vers les bases de données finales. Le pipeline doit respecter cet enchaînement :
 
 1. **Nettoyage, standardisation et curation** : `clean_tabulaires` transforme les sources brutes en jeux de données cohérents, typés et exploitables.
-2. **Enrichissements analytiques** : les jobs `sentiment_analysis.py` et `ML_predictions.py` exploitent les données déjà curées pour produire des sorties textuelles, thématiques et prédictives.
+2. **Enrichissements analytiques** : le job `ML_predictions.py` exploite les données déjà curées pour produire des sorties prédictives ; les avis sont seulement normalisés par `clean_reviews.py`.
 3. **Publication en bases** : les jeux de données traités sont ensuite chargés dans PostgreSQL pour le tabulaire et dans MongoDB pour le textuel.
 
 ### Statut actuel attendu
 
 - `clean_tabulaires` doit réellement faire le nettoyage métier, pas seulement déplacer les fichiers.
-- Les jobs NLP et ML font partie du plan initial et doivent être conservés dans la feuille de route.
+- `clean_reviews` reste le seul traitement textuel actif pour l'instant.
 - Le chargement BDD reste l'étape finale, une fois les données traitées validées.
 
 ---
@@ -406,10 +381,10 @@ L'objectif n'est pas de sauter directement vers les bases de données finales. L
 ## 10) Recommandations opérationnelles (Stratégie d'évolution)
 
 1. **Stabiliser le nettoyage/curation** : faire de `clean_tabulaires` une vraie étape métier avec standardisation, typage, fillna contrôlé et sorties propres dans MinIO.
-2. **Ajouter les jobs analytiques prévus** : implémenter `sentiment_analysis.py` pour le NLP thématique et `ML_predictions.py` pour la prédiction sur les données déjà curées.
+2. **Conserver les traitements utiles** : garder `clean_reviews.py` pour les avis nettoyés et `ML_predictions.py` pour la prédiction sur les données déjà curées.
 3. **Conserver le découpage Airflow/Spark** : Airflow orchestre, Spark traite, puis les sorties validées sont publiées dans MinIO.
-4. **Publier en bases de données** : charger les données tabulaires dans PostgreSQL et les données textuelles/NLP dans MongoDB.
-5. **Livraison UX** : brancher l'application Streamlit sur ces données déjà traitées et persistées.
+4. **Publier en bases de données** : charger les données tabulaires dans PostgreSQL et les données textuelles nettoyées dans MongoDB si besoin plus tard.
+5. **Livraison UX** : à traiter dans une phase ultérieure.
 
 ---
 
@@ -417,7 +392,7 @@ L'objectif n'est pas de sauter directement vers les bases de données finales. L
 
 - **MinIO / Bucket RAW** : Espace de stockage recevant les données brutes dans leur format initial sans modification.
 - **Cluster Spark** : Réseau de machines qui travaillent ensemble pour calculer et filtrer des millions de données très vite.
-- **NLP (Traitement du Langage Naturel)** : Analyse automatique de texte pour en extraire un score, des thèmes et des mots saillants.
+- **NLP (Traitement du Langage Naturel)** : préparation et nettoyage de texte pour exploitation ultérieure.
 - **Airflow / DAG** : Outil visuel qui construit des graphes d'ordonnancement complexes (ex: d'abord le code X, s'il réussit tourne le code Y).
 - **NoSQL** : Base de données (ex MongoDB) qui n'est pas limitée par un système de tableaux stricts.
 

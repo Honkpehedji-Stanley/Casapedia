@@ -34,8 +34,10 @@ with DAG(
         driver_memory='1g',
         verbose=True,
         conf={
+            **get_minio_spark_conf(),
             'spark.driver.host': 'airflow-scheduler',
             'spark.driver.bindAddress': '0.0.0.0',
+            'spark.hadoop.fs.permissions.umask-mode': '000',
         }
     )
 
