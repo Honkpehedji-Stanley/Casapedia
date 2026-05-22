@@ -11,6 +11,24 @@ L'objectif est de partir de données déjà nettoyées par `clean_tabulaires.py`
 3. `clean_reviews.py` lit les avis bruts et les remet au propre.
 4. `ML_predictions.py` lit les données tabulaires déjà curées et entraîne un modèle de prédiction du prix au m².
 
+## 1.1 Millésimes retenus pour les sources tabulaires
+
+La règle générale est simple: on garde le millésime quand la source est annuelle, et on conserve l'horodatage quand la source est transactionnelle.
+
+| Source | Millésimes récupérés | Pourquoi ce choix | Table finale visée |
+| --- | --- | --- | --- |
+| Communes | COG courant 2026 | Référentiel de jointure unique; il faut le code actif, pas une photo historique | `communes` |
+| DVF | Snapshot 2023 | C'est l'extract national exploité par le pipeline; la date de transaction garde l'historique réel | `transactions` |
+| Population INSEE | 2023 | Millésime stable retenu pour la cohérence des jointures et des agrégats | `demographics` |
+| Densité | 2021 | Millésime fourni par la source; on le conserve tel quel pour éviter de fabriquer un faux millésime | `demographics` |
+| Chômage | 2011, 2016, 2022 | Ce sont les seuls millésimes comparables fournis par le fichier INSEE | `demographics` |
+| Revenu disponible | 2023 | Millésime le plus récent exploitable dans la chaîne actuelle | `demographics` |
+| DPE | Flux courant | Source événementielle; on conserve `date_etablissement` et on ne fige pas une année unique | `dpe` |
+| BPE | 2024 et 2019-2024 pour l'évolution | On veut un état récent des équipements et une lecture de tendance | `infrastructure` |
+| Reviews | Date de crawl | Les avis n'ont pas de millésime métier unique; on conserve la date de collecte et la date de l'avis quand elle existe | base textuelle / future Mongo |
+
+Les tables qui vont réellement en base relationnelle sont surtout `communes`, `transactions`, `demographics`, `dpe` et `infrastructure`. Les sorties comme `bpe_rollups` ou `bpe_evolution` servent d'agrégats analytiques et de QA.
+
 ## 2. Job `clean_reviews.py`
 
 ### But
@@ -125,6 +143,21 @@ Ces sorties servent ensuite à faire:
 - des cartes par territoire,
 - des courbes d'erreur du modèle,
 - des vues de contexte autour du marché immobilier.
+
+### Parité des sorties avec la base
+
+| Sortie curée MinIO | Usage | Table finale en base |
+| --- | --- | --- |
+| `processed/transactions/transactions.jsonl` | base transactionnelle du modèle et des analyses de marché | `transactions` |
+| `processed/communes/communes.jsonl` | référentiel géographique | `communes` |
+| `processed/demographics/demographics.jsonl` | population, indicateurs socio-éco annuels | `demographics` |
+| `processed/demographics/density.jsonl` | densité par commune | `demographics` |
+| `processed/demographics/chomage_commune.jsonl` | taux de chômage / actifs | `demographics` |
+| `processed/demographics/revenu_disponible.jsonl` | revenu disponible / revenu médian | `demographics` |
+| `processed/dpe/dpe.jsonl` | diagnostics énergétiques | `dpe` |
+| `processed/infrastructure/bpe_equipment.jsonl` | inventaire des équipements | `infrastructure` |
+| `processed/infrastructure/bpe_rollups.jsonl` | agrégats métiers par zone | vue ou table d'analyse |
+| `processed/infrastructure/bpe_evolution.jsonl` | évolution temporelle des équipements | sidecar analytique |
 
 ### Ce que le job écrit
 

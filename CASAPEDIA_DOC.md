@@ -122,13 +122,24 @@ flowchart TD
 
 ## 3) Différentes sources de données
 
-| Source | Producteur | Type | Granularité | Variables clés | Usage principal |
+| Source | Millésime retenu | Type | Granularité | Variables clés | Usage principal |
 | --- | --- | --- | --- | --- | --- |
-| Référentiel communes | data.gouv.fr / INSEE | CSV | Commune | code INSEE normalisé, nom, dept, région, latitude, longitude, statut actif/historique | Clé géographique maître |
-| DVF (Demande de Valeurs Foncières) | data.gouv.fr | CSV/API | Commune / transaction | date, prix, surface, type de bien, pièces, adresse | Analyse du marché immobilier |
-| Données démographiques | INSEE | CSV/API | Commune / année | population, revenu médian, ménages, chômage | Contextualisation socio-éco |
-| DPE Logements | ADEME | API/CSV | Commune / logement | classe énergie, classe GES, conso, émissions, type bâtiment | Analyse énergétique |
-| Avis Citoyens / Reviews | Ville-Idéale, Villes à Vivre | JSON/Texte | Ville / Quartier | Texte brut, note / 5, source, ville/commune | Pré-traitement des avis et base d’actualité |
+| Référentiel communes | COG courant 2026 | CSV | Commune | code INSEE normalisé, nom, dept, région, latitude, longitude, statut actif/historique | Clé géographique maître |
+| DVF (Demande de Valeurs Foncières) | Snapshot national 2023 | CSV/API | Transaction | date, prix, surface, type de bien, pièces, adresse | Analyse du marché immobilier |
+| Données démographiques | 2021 / 2022 / 2023 selon la source | CSV/API | Commune / année | population, densité, revenu médian, ménages, chômage | Contextualisation socio-éco |
+| DPE Logements | Flux courant de l'API ADEME | API/CSV | Commune / logement | classe énergie, classe GES, conso, émissions, type bâtiment | Analyse énergétique |
+| Avis Citoyens / Reviews | Date de crawl | JSON/Texte | Ville / Quartier | Texte brut, note / 5, source, ville/commune | Pré-traitement des avis et base d’actualité |
+
+### Pourquoi ces années
+
+- **Référentiel communes**: on garde le **COG courant 2026** parce que c’est la clé de jointure commune à tout le reste et qu’on veut distinguer les codes actifs des codes historiques.
+- **DVF**: on garde le **snapshot 2023** parce que c’est l’extract national exploité par le pipeline; la variable temporelle réelle reste `date_transaction`, donc on conserve tout l’historique transactionnel disponible dans ce snapshot.
+- **Population INSEE**: on fixe **2023** parce que c’est le millésime stable choisi pour le référentiel communal de population, utile pour les jointures et la cohérence des agrégats.
+- **Densité**: on garde **2021** car la source publiée porte ce millésime et il sert de référence commune pour l’indicateur de densité.
+- **Chômage**: on conserve **2011, 2016 et 2022** car ce sont les trois millésimes comparables fournis par le fichier INSEE; ils permettent de suivre les évolutions sans mélanger des définitions incompatibles.
+- **Revenu disponible**: on garde **2023** car c’est le millésime disponible dans la source récupérée et le plus récent exploitable dans la chaîne.
+- **BPE**: on garde **2024** pour l’état des équipements et **2019-2024** pour la série d’évolution, afin d’avoir à la fois un instantané récent et une lecture de tendance.
+- **Reviews**: il n’y a pas de millésime métier fixe; on garde la **date de crawl** et la date de l’avis quand elle existe.
 
 ### Note importante
 
@@ -137,6 +148,25 @@ flowchart TD
 - La collecte se sépare radicalement du traitement pour ne pas créer de goulots d'étranglement (stockage objet first).
 - Le référentiel communes est comparé au COG courant de l'Insee pour distinguer les codes actifs des codes historiques, associés ou délégués.
 - Un rapport QA de source est écrit dans MinIO pour tracer les écarts bruts, les doublons et les années couvertes.
+
+### Parité des tables finales de base
+
+| Source curée | Sortie MinIO | Table finale en base | Temporalité |
+| --- | --- | --- | --- |
+| Référentiel communes | `processed/communes/communes.jsonl` | `communes` | Dimension de référence, pas de millésime métier |
+| DVF | `processed/transactions/transactions.jsonl` | `transactions` | Transactionnelle, conserve `date_transaction` |
+| Population INSEE | `processed/demographics/demographics.jsonl` | `demographics.population` | Annuel, millésime 2023 |
+| Densité | `processed/demographics/density.jsonl` | `demographics.densite` | Annuel, millésime source 2021 |
+| Chômage | `processed/demographics/chomage_commune.jsonl` | `demographics.taux_chomage` | Annuel, millésimes 2011 / 2016 / 2022 |
+| Revenu disponible | `processed/demographics/revenu_disponible.jsonl` | `demographics.revenu_median` | Annuel, millésime 2023 |
+| DPE | `processed/dpe/dpe.jsonl` | `dpe` | Événementiel, conserve `date_etablissement` |
+| BPE équipements | `processed/infrastructure/bpe_equipment.jsonl` | `infrastructure` | Snapshot récent 2024 |
+| BPE agrégée | `processed/infrastructure/bpe_rollups.jsonl` | vue/agrégat métier | Agrégée par territoire et domaine |
+| BPE évolution | `processed/infrastructure/bpe_evolution.jsonl` | sidecar analytique | Série 2019-2024 |
+
+Les tables comme `bpe_rollups` et `bpe_evolution` servent à l’analyse et à la QA; la base relationnelle finale conserve surtout les tables pivot `communes`, `transactions`, `demographics`, `dpe` et `infrastructure`.
+
+À noter: les champs `nombre_menages` et `taille_moyenne_menage` restent des cibles de schéma. La source commune-level fiable pour les alimenter n'est pas encore retenue dans la chaîne actuelle.
 
 ---
 
@@ -155,7 +185,7 @@ flowchart TD
 - **PK** : `id`
 - **FK** : `commune_id -> communes.code_insee`
 - Colonnes : `date_transaction`, `prix`, `surface`, `prix_m2`, `type_bien`, `nombre_pieces`, `nature_mutation`, `adresse`, `code_postal`
-- Rôle : cœur des analyses de marché immobilier.
+- Rôle : cœur des analyses de marché immobilier. C’est une table transactionnelle, pas une table annuelle.
 
 ### `demographics`
 
@@ -163,21 +193,21 @@ flowchart TD
 - **FK** : `commune_id -> communes.code_insee`
 - Contrainte : `UNIQUE(commune_id, annee)`
 - Colonnes : `population`, `densite`, `revenu_median`, `taux_chomage`, `nombre_menages`, `taille_moyenne_menage`
-- Rôle : indicateurs socio-économiques annuels.
+- Rôle : indicateurs socio-économiques annuels consolidés. Cette table agrège les millésimes retenus par source au niveau commune / année.
 
 ### `dpe`
 
 - **PK** : `id`
 - **FK** : `commune_id -> communes.code_insee`
 - Colonnes : `classe_energetique`, `classe_ges`, `emissions_co2`, `consommation_energie`, `type_batiment`, `annee_construction`, `surface`, `date_etablissement`
-- Rôle : performance énergétique du parc immobilier.
+- Rôle : performance énergétique du parc immobilier. Les observations sont conservées au fil de l’eau selon la date d’établissement.
 
 ### `infrastructure`
 
 - **PK** : `id`
 - **FK** : `commune_id -> communes.code_insee`
 - Colonnes : `type_equipement`, `nombre`, `nom`, `adresse`, `latitude`, `longitude`
-- Rôle : équipements structurants du territoire.
+- Rôle : équipements structurants du territoire. La base retient le snapshot le plus récent et peut être enrichie par des agrégats d’évolution.
 
 ### `scraping_history`
 
