@@ -31,10 +31,12 @@ with DAG(
         executor_cores=1,
         executor_memory='1g',
         driver_memory='1g',
-        packages='org.apache.hadoop:hadoop-aws:3.4.1',
+        jars='/opt/airflow/libs/hadoop-aws-3.4.1.jar,/opt/airflow/libs/aws-bundle-2.24.6.jar',
         verbose=True,
         conf={
             **get_minio_spark_conf(),
+            'spark.driver.extraClassPath': '/opt/airflow/libs/*',
+            'spark.executor.extraClassPath': '/opt/airflow/libs/*',
             'spark.driver.host': 'airflow-scheduler',
             'spark.driver.bindAddress': '0.0.0.0',
             'spark.hadoop.fs.permissions.umask-mode': '000',

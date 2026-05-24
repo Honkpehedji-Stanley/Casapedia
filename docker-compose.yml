@@ -23,8 +23,8 @@ x-airflow-common:
     - ./logs:/opt/airflow/logs
     - ./plugins:/opt/airflow/plugins
     - ./spark_jobs:/opt/airflow/spark_jobs # Partage des scripts Spark
-    - ./storage:/opt/airflow/storage
     - ./libs:/opt/airflow/libs
+    - ./storage:/opt/airflow/storage
   depends_on:
     - postgres-airflow
     - minio
@@ -115,6 +115,7 @@ services:
       - "7077:7077" # Port de soumission des jobs cluster
     volumes:
       - ./spark_jobs:/opt/airflow/spark_jobs
+      - ./libs:/opt/airflow/libs
       - ./storage:/opt/airflow/storage
     networks:
       - casapedia_network
@@ -145,6 +146,7 @@ services:
       - "8081:8081" # Interface Web Worker
     volumes:
       - ./spark_jobs:/opt/airflow/spark_jobs
+      - ./libs:/opt/airflow/libs
       - ./storage:/opt/airflow/storage
     depends_on:
       - spark-master

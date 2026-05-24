@@ -6,9 +6,11 @@ RUN apt-get update && \
     apt-get install -y default-jre-headless curl && \
     apt-get clean
 
-RUN mkdir -p /opt/airflow/lib && \
+RUN mkdir -p /opt/airflow/libs && \
     curl -fL https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.4.1/hadoop-aws-3.4.1.jar \
-    -o /opt/airflow/lib/hadoop-aws-3.4.1.jar
+    -o /opt/airflow/libs/hadoop-aws-3.4.1.jar && \
+    curl -fL https://repo1.maven.org/maven2/software/amazon/awssdk/bundle/2.24.6/bundle-2.24.6.jar \
+    -o /opt/airflow/libs/aws-bundle-2.24.6.jar
 
 USER airflow
 # Installation du provider Spark pour Airflow et de pyspark compatible avec Spark 4.0 (bitnami/spark:latest)

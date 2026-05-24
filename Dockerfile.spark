@@ -3,10 +3,16 @@ FROM bitnami/spark:latest
 USER root
 
 RUN apt-get update && \
-    apt-get install -y python3.11 python3.11-venv python3.11-distutils && \
+    apt-get install -y python3.11 python3.11-venv python3.11-distutils curl && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
     pip install --no-cache-dir numpy==1.26.3
+
+RUN mkdir -p /opt/airflow/libs && \
+    curl -fL https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.4.1/hadoop-aws-3.4.1.jar \
+    -o /opt/airflow/libs/hadoop-aws-3.4.1.jar && \
+    curl -fL https://repo1.maven.org/maven2/software/amazon/awssdk/bundle/2.24.6/bundle-2.24.6.jar \
+    -o /opt/airflow/libs/aws-bundle-2.24.6.jar
 
 ENV PYSPARK_PYTHON=/usr/bin/python3.11 \
     PYSPARK_DRIVER_PYTHON=/usr/bin/python3.11 \
