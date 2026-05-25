@@ -9,6 +9,7 @@ from collections import Counter
 from csv import DictReader
 from pathlib import Path
 from urllib.request import urlopen
+from uuid import uuid4
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, concat, countDistinct, lit, lpad, sum as spark_sum, trim, when
@@ -44,19 +45,28 @@ def write_jsonl_to_minio(df, output_prefix, filename):
     bucket = ensure_bucket(client, settings["bucket"])
     object_key = f"{output_prefix}/{filename}"
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        local_jsonl_path = os.path.join(temp_dir, filename)
-        row_count = 0
-        with open(local_jsonl_path, "wb") as output_handle:
-            for row_json in df.toJSON().toLocalIterator():
-                output_handle.write((row_json + "\n").encode("utf-8"))
-                row_count += 1
+    temp_prefix = f"{output_prefix}/_tmp/{uuid4().hex}"
+    temp_path = f"s3a://{bucket}/{temp_prefix}"
 
-        if row_count == 0:
-            raise RuntimeError(f"Aucune ligne à exporter pour {object_key}")
+    df.coalesce(1).write.mode("overwrite").json(temp_path)
 
-        with open(local_jsonl_path, "rb") as buffer:
-            upload_fileobj(client, bucket, object_key, buffer, content_type="application/x-ndjson")
+    response = client.list_objects_v2(Bucket=bucket, Prefix=temp_prefix)
+    part_keys = [
+        item["Key"]
+        for item in response.get("Contents", [])
+        if item["Key"].split("/")[-1].startswith("part-")
+    ]
+    if not part_keys:
+        raise RuntimeError(f"Aucun fichier JSON exporté pour {object_key}")
+
+    source_key = part_keys[0]
+    source_object = client.get_object(Bucket=bucket, Key=source_key)
+    try:
+        upload_fileobj(client, bucket, object_key, source_object["Body"], content_type="application/x-ndjson")
+    finally:
+        source_object["Body"].close()
+        for item in response.get("Contents", []):
+            client.delete_object(Bucket=bucket, Key=item["Key"])
 
     print(f"Jeu de données écrit dans : s3a://{bucket}/{object_key}")
 
