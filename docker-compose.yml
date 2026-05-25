@@ -12,6 +12,16 @@ x-airflow-common:
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__WEBSERVER__SECRET_KEY: casapedia-airflow-secret-key
     PYTHONPATH: /opt/airflow
+    DB_HOST: postgres-app
+    DB_PORT: '5432'
+    DB_NAME: casapedia_db
+    DB_USER: casapedia_user
+    DB_PASSWORD: casapedia_password
+    MONGO_HOST: mongodb
+    MONGO_PORT: '27017'
+    MONGO_DB: casapedia
+    MONGO_USER: root
+    MONGO_PASSWORD: examplepassword
     MINIO_ENDPOINT: http://minio:9000
     MINIO_ROOT_USER: minioadmin
     MINIO_ROOT_PASSWORD: minioadmin123

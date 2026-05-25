@@ -8,10 +8,13 @@ CREATE EXTENSION IF NOT EXISTS postgis;
 CREATE TABLE IF NOT EXISTS communes (
     code_insee VARCHAR(5) PRIMARY KEY,
     nom VARCHAR(255) NOT NULL,
-    dept VARCHAR(3) NOT NULL,
+    code_postal VARCHAR(10),
+    dept VARCHAR(5) NOT NULL,
+    dept_name VARCHAR(255),
+    region_code VARCHAR(10),
     region VARCHAR(100) NOT NULL,
-    latitude DECIMAL(10, 7),
-    longitude DECIMAL(10, 7),
+    latitude DECIMAL(10, 8),
+    longitude DECIMAL(11, 8),
     population_actuelle INTEGER,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -23,17 +26,17 @@ CREATE INDEX IF NOT EXISTS idx_communes_region ON communes(region);
 
 -- Table des transactions immobilières
 CREATE TABLE IF NOT EXISTS transactions (
-    id SERIAL PRIMARY KEY,
+    id VARCHAR(100) PRIMARY KEY,
     commune_id VARCHAR(5) NOT NULL,
     date_transaction DATE NOT NULL,
-    prix DECIMAL(12, 2) NOT NULL,
+    prix DECIMAL(15, 2) NOT NULL,
     surface DECIMAL(10, 2),
     prix_m2 DECIMAL(10, 2),
     type_bien VARCHAR(50) NOT NULL, -- 'appartement', 'maison', 'terrain', etc.
     nombre_pieces INTEGER,
     nature_mutation VARCHAR(100), -- 'Vente', 'Vente en l'état futur d'achèvement', etc.
-    adresse TEXT,
-    code_postal VARCHAR(5),
+    adresse VARCHAR(255),
+    code_postal VARCHAR(10),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (commune_id) REFERENCES communes(code_insee) ON DELETE CASCADE
 );
@@ -67,7 +70,7 @@ CREATE INDEX IF NOT EXISTS idx_demographics_annee ON demographics(annee);
 
 -- Table des diagnostics de performance énergétique (DPE)
 CREATE TABLE IF NOT EXISTS dpe (
-    id SERIAL PRIMARY KEY,
+    id VARCHAR(100) PRIMARY KEY,
     commune_id VARCHAR(5) NOT NULL,
     classe_energetique VARCHAR(1) NOT NULL CHECK (classe_energetique IN ('A', 'B', 'C', 'D', 'E', 'F', 'G')),
     classe_ges VARCHAR(1) CHECK (classe_ges IN ('A', 'B', 'C', 'D', 'E', 'F', 'G')),
@@ -105,6 +108,88 @@ CREATE TABLE IF NOT EXISTS infrastructure (
 CREATE INDEX IF NOT EXISTS idx_infrastructure_commune ON infrastructure(commune_id);
 CREATE INDEX IF NOT EXISTS idx_infrastructure_type ON infrastructure(type_equipement);
 
+-- Tables source-specific pour les chargements processed
+CREATE TABLE IF NOT EXISTS demographics_population (
+    id SERIAL PRIMARY KEY,
+    commune_id VARCHAR(5) NOT NULL REFERENCES communes(code_insee) ON DELETE CASCADE,
+    annee INTEGER NOT NULL,
+    population INTEGER,
+    UNIQUE(commune_id, annee)
+);
+
+CREATE TABLE IF NOT EXISTS demographics_density (
+    id SERIAL PRIMARY KEY,
+    commune_id VARCHAR(5) NOT NULL REFERENCES communes(code_insee) ON DELETE CASCADE,
+    annee INTEGER NOT NULL,
+    nom_territoire VARCHAR(255),
+    densite_population DECIMAL(15, 4),
+    numerateur DECIMAL(15, 4),
+    denominateur DECIMAL(15, 4),
+    UNIQUE(commune_id, annee)
+);
+
+CREATE TABLE IF NOT EXISTS demographics_chomage (
+    id SERIAL PRIMARY KEY,
+    commune_id VARCHAR(5) NOT NULL REFERENCES communes(code_insee) ON DELETE CASCADE,
+    annee INTEGER NOT NULL,
+    actifs_15_64 DECIMAL(15, 4),
+    chomeurs_15_64 DECIMAL(15, 4),
+    taux_chomage DECIMAL(8, 6),
+    UNIQUE(commune_id, annee)
+);
+
+CREATE TABLE IF NOT EXISTS revenue_disponible (
+    id SERIAL PRIMARY KEY,
+    age VARCHAR(50),
+    mesure VARCHAR(50),
+    nb_pers VARCHAR(50),
+    nch VARCHAR(50),
+    pcs VARCHAR(50),
+    tph VARCHAR(50),
+    statut_obs VARCHAR(50),
+    unite_mesure VARCHAR(50),
+    unite_mult VARCHAR(50),
+    annee INTEGER,
+    valeur DECIMAL(15, 4)
+);
+
+CREATE TABLE IF NOT EXISTS bpe_equipment (
+    id SERIAL PRIMARY KEY,
+    geo VARCHAR(50),
+    geo_object VARCHAR(20),
+    facility_dom VARCHAR(50),
+    facility_dom_label VARCHAR(255),
+    facility_sdom VARCHAR(50),
+    facility_sdom_label VARCHAR(255),
+    facility_type VARCHAR(50),
+    facility_type_label VARCHAR(255),
+    bpe_measure VARCHAR(50),
+    annee INTEGER,
+    valeur DECIMAL(15, 4)
+);
+
+CREATE TABLE IF NOT EXISTS bpe_rollups (
+    id SERIAL PRIMARY KEY,
+    annee INTEGER,
+    geo VARCHAR(50),
+    geo_object VARCHAR(20),
+    facility_dom VARCHAR(50),
+    facility_dom_label VARCHAR(255),
+    facility_sdom VARCHAR(50),
+    facility_sdom_label VARCHAR(255),
+    equipements_total DECIMAL(15, 4)
+);
+
+CREATE TABLE IF NOT EXISTS bpe_evolution (
+    id SERIAL PRIMARY KEY,
+    geo VARCHAR(50),
+    geo_object VARCHAR(20),
+    facility_type VARCHAR(50),
+    bpe_measure VARCHAR(50),
+    annee INTEGER,
+    valeur DECIMAL(15, 4)
+);
+
 -- Vues utiles pour les analyses
 
 -- Vue : Prix médian par commune
@@ -121,7 +206,10 @@ SELECT
     AVG(surface) as surface_moyenne
 FROM transactions t
 JOIN communes c ON t.commune_id = c.code_insee
-WHERE date_transaction >= CURRENT_DATE - INTERVAL '12 months'
+WHERE date_transaction >= (
+    SELECT MAX(date_transaction) - 365
+    FROM transactions
+)
 GROUP BY commune_id, c.nom, c.dept, c.region;
 
 -- Vue : Statistiques DPE par commune
