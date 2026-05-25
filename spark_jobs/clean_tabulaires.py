@@ -42,14 +42,30 @@ def write_jsonl_to_minio(df, output_prefix, filename):
     client = get_minio_client()
     settings = get_minio_settings()
     bucket = ensure_bucket(client, settings["bucket"])
-
-    buffer = BytesIO()
-    for row_json in df.toJSON().toLocalIterator():
-        buffer.write((row_json + "\n").encode("utf-8"))
-    buffer.seek(0)
-
     object_key = f"{output_prefix}/{filename}"
-    upload_fileobj(client, bucket, object_key, buffer, content_type="application/x-ndjson")
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        export_dir = os.path.join(temp_dir, "json_export")
+        df.write.mode("overwrite").json(export_dir)
+
+        part_files = [
+            os.path.join(export_dir, entry)
+            for entry in sorted(os.listdir(export_dir))
+            if entry.startswith("part-")
+        ]
+        if not part_files:
+            raise RuntimeError(f"Aucun fichier JSON exporté pour {object_key}")
+
+        local_jsonl_path = os.path.join(temp_dir, filename)
+        with open(local_jsonl_path, "wb") as output_handle:
+            for part_file in part_files:
+                with open(part_file, "rb") as part_handle:
+                    for chunk in iter(lambda: part_handle.read(1024 * 1024), b""):
+                        output_handle.write(chunk)
+
+        with open(local_jsonl_path, "rb") as buffer:
+            upload_fileobj(client, bucket, object_key, buffer, content_type="application/x-ndjson")
+
     print(f"Jeu de données écrit dans : s3a://{bucket}/{object_key}")
 
 
