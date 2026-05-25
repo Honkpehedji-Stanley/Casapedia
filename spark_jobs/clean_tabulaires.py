@@ -45,23 +45,15 @@ def write_jsonl_to_minio(df, output_prefix, filename):
     object_key = f"{output_prefix}/{filename}"
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        export_dir = os.path.join(temp_dir, "json_export")
-        df.write.mode("overwrite").json(export_dir)
-
-        part_files = [
-            os.path.join(export_dir, entry)
-            for entry in sorted(os.listdir(export_dir))
-            if entry.startswith("part-")
-        ]
-        if not part_files:
-            raise RuntimeError(f"Aucun fichier JSON exporté pour {object_key}")
-
         local_jsonl_path = os.path.join(temp_dir, filename)
+        row_count = 0
         with open(local_jsonl_path, "wb") as output_handle:
-            for part_file in part_files:
-                with open(part_file, "rb") as part_handle:
-                    for chunk in iter(lambda: part_handle.read(1024 * 1024), b""):
-                        output_handle.write(chunk)
+            for row_json in df.toJSON().toLocalIterator():
+                output_handle.write((row_json + "\n").encode("utf-8"))
+                row_count += 1
+
+        if row_count == 0:
+            raise RuntimeError(f"Aucune ligne à exporter pour {object_key}")
 
         with open(local_jsonl_path, "rb") as buffer:
             upload_fileobj(client, bucket, object_key, buffer, content_type="application/x-ndjson")
