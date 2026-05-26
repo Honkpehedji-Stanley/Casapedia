@@ -9,7 +9,6 @@ from collections import Counter
 from csv import DictReader
 from pathlib import Path
 from urllib.request import urlopen
-from uuid import uuid4
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, concat, countDistinct, lit, lpad, sum as spark_sum, trim, when
@@ -40,35 +39,45 @@ def download_raw_object(object_key, destination_path):
 
 
 def write_jsonl_to_minio(df, output_prefix, filename):
-    client = get_minio_client()
     settings = get_minio_settings()
-    bucket = ensure_bucket(client, settings["bucket"])
     object_key = f"{output_prefix}/{filename}"
 
-    temp_prefix = f"{output_prefix}/_tmp/{uuid4().hex}"
-    temp_path = f"s3a://{bucket}/{temp_prefix}"
+    def write_partition(rows_iter):
+        from botocore.client import Config
+        import boto3
 
-    df.coalesce(1).write.mode("overwrite").json(temp_path)
+        partition_client = boto3.client(
+            "s3",
+            endpoint_url=settings["endpoint_url"],
+            aws_access_key_id=settings["access_key"],
+            aws_secret_access_key=settings["secret_key"],
+            config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+        )
+        bucket = ensure_bucket(partition_client, settings["bucket"])
 
-    response = client.list_objects_v2(Bucket=bucket, Prefix=temp_prefix)
-    part_keys = [
-        item["Key"]
-        for item in response.get("Contents", [])
-        if item["Key"].split("/")[-1].startswith("part-")
-    ]
-    if not part_keys:
-        raise RuntimeError(f"Aucun fichier JSON exporté pour {object_key}")
+        with tempfile.NamedTemporaryFile(mode="wb", suffix=".jsonl", delete=False) as temp_file:
+            temp_path = temp_file.name
+            row_count = 0
+            try:
+                for row in rows_iter:
+                    temp_file.write((json.dumps(row.asDict(recursive=True), ensure_ascii=False, default=str) + "\n").encode("utf-8"))
+                    row_count += 1
+            finally:
+                temp_file.flush()
 
-    source_key = part_keys[0]
-    source_object = client.get_object(Bucket=bucket, Key=source_key)
-    try:
-        upload_fileobj(client, bucket, object_key, source_object["Body"], content_type="application/x-ndjson")
-    finally:
-        source_object["Body"].close()
-        for item in response.get("Contents", []):
-            client.delete_object(Bucket=bucket, Key=item["Key"])
+        try:
+            if row_count == 0:
+                raise RuntimeError(f"Aucune ligne à exporter pour {object_key}")
 
-    print(f"Jeu de données écrit dans : s3a://{bucket}/{object_key}")
+            with open(temp_path, "rb") as buffer:
+                upload_fileobj(partition_client, bucket, object_key, buffer, content_type="application/x-ndjson")
+        finally:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+
+    df.coalesce(1).rdd.foreachPartition(write_partition)
+
+    print(f"Jeu de données écrit dans : s3a://{settings['bucket']}/{object_key}")
 
 
 def write_json_to_minio(payload, output_prefix, filename):
