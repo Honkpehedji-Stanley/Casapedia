@@ -6,14 +6,17 @@ import sys
 import time
 from io import BytesIO
 from pathlib import Path
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from airflow import DAG
+from airflow.decorators import task
 from airflow.operators.python import PythonOperator
 from datetime import datetime, timedelta
 import tempfile
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 AIRFLOW_HOME = Path(__file__).resolve().parents[1]
 if str(AIRFLOW_HOME) not in sys.path:
@@ -60,11 +63,53 @@ BPE_EVOLUTION_URL = os.getenv(
     'CASAPEDIA_BPE_EVOLUTION_URL',
     'https://www.insee.fr/fr/statistiques/fichier/8217532/DS_BPE_EVOLUTION_CSV_FR.zip',
 )
+DPE_DATASET_ID = os.getenv('CASAPEDIA_DPE_DATASET_ID', 'meg-83tjwtg8dyz4vv7h1dqe')
+DPE_EXPORT_URL = os.getenv(
+    'CASAPEDIA_DPE_EXPORT_URL',
+    f'https://data.ademe.fr/data-fair/api/v1/datasets/{DPE_DATASET_ID}/lines?size=10000&format=csv',
+)
+DPE_PAGES_PER_TASK = int(os.getenv('CASAPEDIA_DPE_PAGES_PER_TASK', '25'))
+DVF_BASE_URL = os.getenv(
+    'CASAPEDIA_DVF_BASE_URL',
+    'https://files.data.gouv.fr/geo-dvf/latest/csv',
+)
+DVF_YEARS = [
+    int(year.strip())
+    for year in os.getenv('CASAPEDIA_DVF_YEARS', '2021,2022,2023,2024,2025').split(',')
+    if year.strip()
+]
 
-def download_file(url, dest_folder, filename):
+
+def get_dpe_total_pages():
+    try:
+        response = requests.get(f'https://data.ademe.fr/data-fair/api/v1/datasets/{DPE_DATASET_ID}/lines?size=0', timeout=(10, 30))
+        response.raise_for_status()
+        total_rows = int(response.json().get('total', 0))
+        if total_rows > 0:
+            return (total_rows + 9999) // 10000
+    except Exception as error:
+        print(f"Impossible de récupérer le nombre total de pages DPE: {error}")
+
+    return int(os.getenv('CASAPEDIA_DPE_ESTIMATED_TOTAL_PAGES', '1500'))
+
+
+def dpe_next_url_from_response(response):
+    next_link = response.links.get('next', {}).get('url')
+    if not next_link:
+        return None
+    return append_query_param(next_link, 'header', 'false')
+
+def download_file(url, dest_folder, filename, timeout=None, chunk_size=None):
     """
     Fonction ELT : Téléchargement 'Dumb'.
     """
+    # Résilience: session avec retry + backoff
+    session = requests.Session()
+    retries = Retry(total=5, backoff_factor=1, status_forcelist=(429, 500, 502, 503, 504), allowed_methods=frozenset(['GET', 'POST']))
+    adapter = HTTPAdapter(max_retries=retries)
+    session.mount('https://', adapter)
+    session.mount('http://', adapter)
+
     settings = get_minio_settings()
     client = get_minio_client()
     bucket = ensure_bucket(client, settings["bucket"])
@@ -72,17 +117,33 @@ def download_file(url, dest_folder, filename):
 
     print(f"Début du téléchargement : {url}")
 
-    with requests.get(url, stream=True) as r:
-        r.raise_for_status()
-        with tempfile.NamedTemporaryFile(suffix=f"-{filename}") as temp_file:
-            for chunk in r.iter_content(chunk_size=1024 * 1024):
-                if chunk:
-                    temp_file.write(chunk)
-            temp_file.flush()
-            temp_file.seek(0)
-            upload_fileobj(client, bucket, object_key, temp_file.file, content_type=r.headers.get("Content-Type"))
+    request_timeout = timeout or (10, int(os.getenv('CASAPEDIA_DOWNLOAD_READ_TIMEOUT', '120')))
+    request_chunk_size = chunk_size or int(os.getenv('CASAPEDIA_DOWNLOAD_CHUNK_SIZE', str(256 * 1024)))
 
-    print(f"Téléchargement terminé avec succès et sauvegardé sous : s3a://{bucket}/{object_key}")
+    attempt = 0
+    max_attempts = 5
+    while attempt < max_attempts:
+        attempt += 1
+        try:
+            with session.get(url, stream=True, timeout=request_timeout) as r:
+                r.raise_for_status()
+                with tempfile.NamedTemporaryFile(suffix=f"-{filename}") as temp_file:
+                    for chunk in r.iter_content(chunk_size=request_chunk_size):
+                        if chunk:
+                            temp_file.write(chunk)
+                    temp_file.flush()
+                    temp_file.seek(0)
+                    upload_fileobj(client, bucket, object_key, temp_file.file, content_type=r.headers.get("Content-Type"))
+
+            print(f"Téléchargement terminé avec succès et sauvegardé sous : s3a://{bucket}/{object_key}")
+            return
+        except Exception as error:
+            print(f"Téléchargement échoué (tentative {attempt}/{max_attempts}): {error}")
+            if attempt >= max_attempts:
+                raise
+            sleep_seconds = 2 ** attempt
+            print(f"Attente {sleep_seconds}s avant nouvelle tentative...")
+            time.sleep(sleep_seconds)
 
 
 def fetch_html(url):
@@ -130,6 +191,13 @@ def write_jsonl_to_minio(records, output_prefix, filename):
     upload_fileobj(client, bucket, object_key, buffer, content_type="application/x-ndjson")
 
     print(f"Avis enregistrés dans : s3a://{bucket}/{object_key}")
+
+
+def append_query_param(url, key, value):
+    parsed = urlsplit(url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query[key] = str(value)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment))
 
 
 def extract_city_links(home_html, base_url, pattern):
@@ -332,6 +400,8 @@ def ingest_insee_unemployment():
         INSEE_UNEMPLOYMENT_URL,
         'insee',
         'population_active_chomage_2022.zip',
+        timeout=(10, int(os.getenv('CASAPEDIA_INSEE_UNEMPLOYMENT_READ_TIMEOUT', '900'))),
+        chunk_size=int(os.getenv('CASAPEDIA_INSEE_UNEMPLOYMENT_CHUNK_SIZE', str(128 * 1024))),
     )
 
 
@@ -358,6 +428,133 @@ def ingest_bpe_evolution():
         'bpe_evolution_2019_2024.zip',
     )
 
+
+def ingest_dpe_batch(start_url, pages_to_fetch, batch_index, total_batches):
+    settings = get_minio_settings()
+    client = get_minio_client()
+    bucket = ensure_bucket(client, settings["bucket"])
+
+    object_key = f'raw/dpe/dpe_logements_brut_part_{batch_index:03d}_{total_batches:03d}.csv'
+    download_url = start_url
+    page_count = 0
+    line_count = 0
+    header_line = None
+
+    # Utiliser une session résiliente et retenter les pages individuellement
+    session = requests.Session()
+    retries = Retry(total=5, backoff_factor=1, status_forcelist=(429, 500, 502, 503, 504), allowed_methods=frozenset(['GET']))
+    adapter = HTTPAdapter(max_retries=retries)
+    session.mount('https://', adapter)
+    session.mount('http://', adapter)
+
+    per_page_sleep = float(os.getenv('CASAPEDIA_DPE_PAGE_SLEEP', '0.1'))
+
+    with tempfile.NamedTemporaryFile(mode='wb', suffix='-dpe_logements_brut.csv') as temp_file:
+        while download_url and page_count < pages_to_fetch:
+            print(f"Début du téléchargement DPE: {download_url}")
+            try:
+                response = session.get(download_url, stream=True, timeout=(10, 120))
+                response.raise_for_status()
+            except Exception as error:
+                print(f"Erreur téléchargement page DPE: {error}")
+                # Laisser la session Retry tenter automatiquement; si on arrive ici, la page a échoué
+                raise
+
+            page_line_count = 0
+            for raw_line in response.iter_lines(decode_unicode=False):
+                if raw_line is None:
+                    continue
+                if page_line_count == 0:
+                    if header_line is None:
+                        header_line = raw_line
+                    elif raw_line == header_line:
+                        continue
+
+                temp_file.write(raw_line)
+                temp_file.write(b"\n")
+                page_line_count += 1
+
+            if page_line_count == 0:
+                break
+
+            line_count += page_line_count
+            page_count += 1
+
+            download_url = dpe_next_url_from_response(response)
+
+            # Respecter limites et éviter raffût réseau
+            time.sleep(per_page_sleep)
+
+        temp_file.flush()
+        temp_file.seek(0)
+        if line_count == 0:
+            raise RuntimeError('Aucune ligne DPE téléchargée.')
+        upload_fileobj(client, bucket, object_key, temp_file, content_type='text/csv')
+
+    print(f"DPE - pages téléchargées: {page_count}")
+    print(f"DPE - lignes téléchargées: {line_count}")
+    print(f"DPE écrit dans : s3a://{bucket}/{object_key}")
+
+
+def plan_dpe_batches(total_pages, pages_per_task):
+    session = requests.Session()
+    retries = Retry(total=5, backoff_factor=1, status_forcelist=(429, 500, 502, 503, 504), allowed_methods=frozenset(['GET']))
+    adapter = HTTPAdapter(max_retries=retries)
+    session.mount('https://', adapter)
+    session.mount('http://', adapter)
+
+    batches = []
+    batch_index = 0
+    current_page = 0
+    batch_start_url = append_query_param(DPE_EXPORT_URL, 'page', 1)
+    download_url = batch_start_url
+
+    while download_url and current_page < total_pages:
+        batch_pages = 0
+        while download_url and batch_pages < pages_per_task and current_page < total_pages:
+            try:
+                response = session.get(download_url, stream=True, timeout=(10, 60))
+                response.raise_for_status()
+            except Exception as error:
+                raise RuntimeError(f"Impossible de planifier les lots DPE à la page {current_page + 1}: {error}")
+
+            current_page += 1
+            batch_pages += 1
+            download_url = dpe_next_url_from_response(response)
+            response.close()
+
+        batch_index += 1
+        batches.append({
+            'batch_index': batch_index,
+            'start_url': batch_start_url,
+            'pages_to_fetch': batch_pages,
+        })
+        batch_start_url = download_url
+
+    return batches
+
+
+def ingest_dvf():
+    downloaded_years = []
+    skipped_years = []
+
+    for year in DVF_YEARS:
+        url = f"{DVF_BASE_URL}/{year}/full.csv.gz"
+        filename = f"transactions_dvf_{year}.csv.gz"
+        try:
+            download_file(url, 'dvf', filename)
+            downloaded_years.append(str(year))
+        except Exception as error:
+            skipped_years.append(str(year))
+            print(f"DVF {year} indisponible ou non téléchargeable: {error}")
+
+    if not downloaded_years:
+        raise RuntimeError("Aucun millésime DVF n'a pu être téléchargé.")
+
+    print(f"DVF - millésimes téléchargés: {', '.join(downloaded_years)}")
+    if skipped_years:
+        print(f"DVF - millésimes ignorés: {', '.join(skipped_years)}")
+
 # Définition du Workflow (DAG)
 with DAG(
     '1_ingestion_raw_data',
@@ -368,7 +565,6 @@ with DAG(
     catchup=False,
     tags=['casapedia', 'ingestion', 'minio', 'raw'],
 ) as dag:
-
     # Tâche 1 : Ingestion des Communes (Référentiel de base)
     ingest_communes = PythonOperator(
         task_id='download_communes',
@@ -392,26 +588,31 @@ with DAG(
     )
 
     # Tâche 3 : Ingestion DVF (Base consolidée Data.gouv pour toute la France)
-    ingest_dvf = PythonOperator(
+    ingest_dvf_task = PythonOperator(
         task_id='download_dvf',
-        python_callable=download_file,
-        op_kwargs={
-            'url': 'https://files.data.gouv.fr/geo-dvf/latest/csv/2023/full.csv.gz', 
-            'dest_folder': 'dvf',
-            'filename': 'transactions_dvf_brut.csv.gz'
-        }
+        python_callable=ingest_dvf,
     )
 
-    # Tâche 4 : Ingestion DPE (Diagnostics de performance énergétique - Échantillon ADEME)
-    ingest_dpe = PythonOperator(
-        task_id='download_dpe',
-        python_callable=download_file,
-        op_kwargs={
-            'url': 'https://data.ademe.fr/data-fair/api/v1/datasets/dpe03existant/lines?size=10000&format=csv',
-            'dest_folder': 'dpe',
-            'filename': 'dpe_logements_brut.csv'
-        }
-    )
+    @task(task_id='plan_dpe_batches')
+    def plan_dpe_batches_task():
+        total_pages = get_dpe_total_pages()
+        batches = plan_dpe_batches(total_pages, DPE_PAGES_PER_TASK)
+        total_batches = len(batches)
+        for batch in batches:
+            batch['total_batches'] = total_batches
+        return batches
+
+    @task(task_id='download_dpe_batch')
+    def download_dpe_batch_task(batch):
+        ingest_dpe_batch(
+            batch['start_url'],
+            batch['pages_to_fetch'],
+            batch['batch_index'],
+            batch['total_batches'],
+        )
+
+    dpe_batch_plan = plan_dpe_batches_task()
+    download_dpe_batch_task.expand(batch=dpe_batch_plan)
 
     # Tâche 5 : Ingestion des avis Ville-Idéale
     ingest_ville_ideale_reviews_task = PythonOperator(
@@ -454,8 +655,7 @@ with DAG(
     [
         ingest_communes,
         ingest_insee,
-        ingest_dvf,
-        ingest_dpe,
+        ingest_dvf_task,
         ingest_ville_ideale_reviews_task,
         ingest_villesavivre_reviews_task,
         ingest_insee_revenue_task,
@@ -464,3 +664,5 @@ with DAG(
         ingest_bpe_2024_task,
         ingest_bpe_evolution_task,
     ]
+
+    dpe_batch_plan

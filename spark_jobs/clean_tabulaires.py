@@ -19,7 +19,7 @@ if str(AIRFLOW_HOME) not in sys.path:
 
 from io import BytesIO
 
-from storage.minio_utils import download_to_path, ensure_bucket, get_minio_client, get_minio_settings, upload_fileobj
+from storage.minio_utils import download_to_path, ensure_bucket, get_minio_client, get_minio_settings, list_objects_with_prefix, upload_fileobj
 
 S3_BUCKET = os.getenv("CASAPEDIA_S3_BUCKET", "casapedia-datalake")
 SHARED_WORK_DIR = AIRFLOW_HOME / "spark_jobs" / "_work" / "clean_tabulaires"
@@ -28,6 +28,11 @@ COG_COMMUNE_URL = os.getenv(
     "https://www.insee.fr/fr/statistiques/fichier/8740222/v_commune_2026.csv",
 )
 COG_COMMUNE_MILLESIME = os.getenv("CASAPEDIA_COG_COMMUNE_MILLESIME", "2026")
+DVF_YEARS = [
+    int(year.strip())
+    for year in os.getenv("CASAPEDIA_DVF_YEARS", "2021,2022,2023,2024,2025").split(",")
+    if year.strip()
+]
 
 
 def download_raw_object(object_key, destination_path):
@@ -41,41 +46,35 @@ def download_raw_object(object_key, destination_path):
 def write_jsonl_to_minio(df, output_prefix, filename):
     settings = get_minio_settings()
     object_key = f"{output_prefix}/{filename}"
+    local_output_dir = SHARED_WORK_DIR / output_prefix.replace("/", "_")
+    local_output_dir.mkdir(parents=True, exist_ok=True)
+    local_output_path = local_output_dir / filename
 
     def write_partition(rows_iter):
-        from botocore.client import Config
-        import boto3
+        row_count = 0
+        with open(local_output_path, "w", encoding="utf-8") as temp_file:
+            for row in rows_iter:
+                temp_file.write(json.dumps(row.asDict(recursive=True), ensure_ascii=False, default=str))
+                temp_file.write("\n")
+                row_count += 1
 
-        partition_client = boto3.client(
-            "s3",
-            endpoint_url=settings["endpoint_url"],
-            aws_access_key_id=settings["access_key"],
-            aws_secret_access_key=settings["secret_key"],
-            config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
-        )
-        bucket = ensure_bucket(partition_client, settings["bucket"])
-
-        with tempfile.NamedTemporaryFile(mode="wb", suffix=".jsonl", delete=False) as temp_file:
-            temp_path = temp_file.name
-            row_count = 0
-            try:
-                for row in rows_iter:
-                    temp_file.write((json.dumps(row.asDict(recursive=True), ensure_ascii=False, default=str) + "\n").encode("utf-8"))
-                    row_count += 1
-            finally:
-                temp_file.flush()
-
-        try:
-            if row_count == 0:
-                raise RuntimeError(f"Aucune ligne à exporter pour {object_key}")
-
-            with open(temp_path, "rb") as buffer:
-                upload_fileobj(partition_client, bucket, object_key, buffer, content_type="application/x-ndjson")
-        finally:
-            if os.path.exists(temp_path):
-                os.unlink(temp_path)
+        if row_count == 0:
+            raise RuntimeError(f"Aucune ligne à exporter pour {object_key}")
 
     df.coalesce(1).rdd.foreachPartition(write_partition)
+
+    if not local_output_path.exists():
+        raise RuntimeError(f"Le fichier local attendu est introuvable pour {object_key}")
+
+    client = get_minio_client()
+    bucket = ensure_bucket(client, settings["bucket"])
+
+    try:
+        with open(local_output_path, "rb") as buffer:
+            upload_fileobj(client, bucket, object_key, buffer, content_type="application/x-ndjson")
+    finally:
+        if local_output_path.exists():
+            local_output_path.unlink()
 
     print(f"Jeu de données écrit dans : s3a://{settings['bucket']}/{object_key}")
 
@@ -343,10 +342,25 @@ def main():
         write_json_to_minio(commune_qa_report, "processed/qa", "source_qa.json")
 
         # 2. Traitement DVF (Valeurs Foncières)
-        print("Traitement de transactions_dvf_brut.csv.gz...")
-        local_dvf_path = os.path.join(temp_dir, "transactions_dvf_brut.csv.gz")
-        download_raw_object("raw/dvf/transactions_dvf_brut.csv.gz", local_dvf_path)
-        df_dvf = spark.read.csv(local_dvf_path, header=True, sep=",")
+        print("Traitement des millésimes DVF...")
+        local_dvf_paths = []
+        loaded_dvf_years = []
+
+        for year in DVF_YEARS:
+            object_key = f"raw/dvf/transactions_dvf_{year}.csv.gz"
+            local_dvf_path = os.path.join(temp_dir, f"transactions_dvf_{year}.csv.gz")
+            try:
+                download_raw_object(object_key, local_dvf_path)
+                local_dvf_paths.append(local_dvf_path)
+                loaded_dvf_years.append(str(year))
+            except Exception as error:
+                print(f"DVF {year} ignoré: {error}")
+
+        if not local_dvf_paths:
+            raise RuntimeError("Aucun millésime DVF disponible dans MinIO.")
+
+        print(f"DVF - millésimes chargés: {', '.join(loaded_dvf_years)}")
+        df_dvf = spark.read.csv(sorted(local_dvf_paths), header=True, sep=",")
         df_dvf_clean = df_dvf.select(
             trim(col("id_mutation")).alias("id"),
             trim(col("code_commune")).alias("commune_id"),
@@ -368,10 +382,21 @@ def main():
         write_jsonl_to_minio(df_dvf_clean, "processed/transactions", "transactions.jsonl")
 
         # 3. Traitement DPE (Diagnostics Énergétiques)
-        print("Traitement de dpe_logements_brut.csv...")
-        local_dpe_path = os.path.join(temp_dir, "dpe_logements_brut.csv")
-        download_raw_object("raw/dpe/dpe_logements_brut.csv", local_dpe_path)
-        df_dpe = spark.read.csv(local_dpe_path, header=True, sep=",", multiLine=True, escape='"')
+        print("Traitement de dpe_logements_brut...")
+        minio_client = get_minio_client()
+        minio_bucket = ensure_bucket(minio_client, get_minio_settings()["bucket"])
+        dpe_object_keys = list_objects_with_prefix(minio_client, minio_bucket, "raw/dpe/")
+        dpe_object_keys = [key for key in dpe_object_keys if key.endswith(".csv") or key.endswith(".csv.gz")]
+        if not dpe_object_keys:
+            dpe_object_keys = ["raw/dpe/dpe_logements_brut.csv"]
+
+        local_dpe_paths = []
+        for object_key in dpe_object_keys:
+            local_dpe_path = os.path.join(temp_dir, os.path.basename(object_key))
+            download_raw_object(object_key, local_dpe_path)
+            local_dpe_paths.append(local_dpe_path)
+
+        df_dpe = spark.read.csv(sorted(local_dpe_paths), header=True, sep=",", multiLine=True, escape='"')
         df_dpe_clean = df_dpe.select(
             trim(col("numero_dpe")).alias("id"),
             trim(col("code_insee_ban")).alias("commune_id"),

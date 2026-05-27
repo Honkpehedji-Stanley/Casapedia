@@ -50,6 +50,19 @@ def download_to_path(client, bucket_name, object_key, destination_path):
     client.download_file(bucket_name, object_key, destination_path)
 
 
+def list_objects_with_prefix(client, bucket_name, prefix):
+    paginator = client.get_paginator("list_objects_v2")
+    object_keys = []
+
+    for page in paginator.paginate(Bucket=bucket_name, Prefix=prefix):
+        for entry in page.get("Contents", []):
+            key = entry.get("Key")
+            if key:
+                object_keys.append(key)
+
+    return sorted(object_keys)
+
+
 def s3_path(prefix):
     settings = get_minio_settings()
     clean_prefix = prefix.lstrip("/")

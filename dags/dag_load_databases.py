@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -92,6 +93,20 @@ def get_commune_id_set(cursor):
     return {row[0] for row in cursor.fetchall()}
 
 
+def normalize_commune_id(commune_id):
+    if commune_id is None:
+        return None
+
+    commune_id = str(commune_id).strip()
+    if not commune_id:
+        return None
+
+    if commune_id.isdigit() and len(commune_id) < 5:
+        return commune_id.zfill(5)
+
+    return commune_id
+
+
 def filter_rows_by_communes(rows, columns, valid_commune_ids):
     if "commune_id" not in columns:
         return rows
@@ -100,9 +115,11 @@ def filter_rows_by_communes(rows, columns, valid_commune_ids):
     filtered_rows = []
     skipped = 0
     for row in rows:
-        commune_id = row[commune_index]
+        commune_id = normalize_commune_id(row[commune_index])
         if commune_id in valid_commune_ids:
-            filtered_rows.append(row)
+            filtered_row = list(row)
+            filtered_row[commune_index] = commune_id
+            filtered_rows.append(tuple(filtered_row))
         else:
             skipped += 1
 
@@ -290,7 +307,13 @@ def load_postgres_data(**_context):
                         print(f"Aucune donnée à charger pour {table_name}")
                         continue
 
-                    rows = [tuple(record.get(column) for column in columns) for record in records]
+                    rows = [
+                        tuple(
+                            normalize_commune_id(record.get(column)) if column == "commune_id" else record.get(column)
+                            for column in columns
+                        )
+                        for record in records
+                    ]
                     if table_name != "communes" and "commune_id" in columns:
                         valid_commune_ids = get_commune_id_set(cursor)
                         rows, skipped = filter_rows_by_communes(rows, columns, valid_commune_ids)
@@ -319,9 +342,13 @@ def load_reviews_to_mongo(**_context):
     try:
         from pymongo import MongoClient
     except ImportError as error:
-        raise RuntimeError(
-            "pymongo n'est pas installé dans l'image Airflow; reconstruis l'image avant d'exécuter ce DAG"
-        ) from error
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "--user", "pymongo"])
+            from pymongo import MongoClient
+        except Exception as install_error:
+            raise RuntimeError(
+                "pymongo n'est pas installé dans l'image Airflow et l'installation locale a échoué"
+            ) from install_error
 
     mongo_host = os.getenv("MONGO_HOST", "mongodb")
     mongo_port = os.getenv("MONGO_PORT", "27017")
