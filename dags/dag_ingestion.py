@@ -67,6 +67,7 @@ DPE_EXPORT_URL = os.getenv(
     'CASAPEDIA_DPE_EXPORT_URL',
     f'https://data.ademe.fr/data-fair/api/v1/datasets/{DPE_DATASET_ID}/lines?size=10000&format=csv',
 )
+DPE_MAX_PAGES_PER_RUN = int(os.getenv('CASAPEDIA_DPE_MAX_PAGES_PER_RUN', '600'))
 DVF_BASE_URL = os.getenv(
     'CASAPEDIA_DVF_BASE_URL',
     'https://files.data.gouv.fr/geo-dvf/latest/csv',
@@ -489,10 +490,11 @@ def download_dpe_resumable(client, bucket, state, state_key, page_prefix):
     total_downloaded_pages = 0
     per_page_sleep = float(os.getenv('CASAPEDIA_DPE_PAGE_SLEEP', '0'))
     max_attempts_per_page = int(os.getenv('CASAPEDIA_DPE_PAGE_ATTEMPTS', '6'))
+    max_pages_per_run = max(1, DPE_MAX_PAGES_PER_RUN)
 
     existing_objects = set(list_dpe_page_objects(client, bucket, page_prefix))
 
-    while current_url:
+    while current_url and total_downloaded_pages < max_pages_per_run:
         page_object_key = f"{page_prefix}{current_page_index:05d}.csv"
         if page_object_key in existing_objects:
             print(f"DPE page déjà présente, reprise: {page_object_key}")
@@ -554,6 +556,11 @@ def download_dpe_resumable(client, bucket, state, state_key, page_prefix):
                     response.close()
 
     print(f"DPE - pages téléchargées/reprises: {total_downloaded_pages}")
+    if current_url:
+        print(
+            f"DPE - reprise requise: limite de {max_pages_per_run} pages atteinte pour ce run. "
+            f"Le prochain run reprendra à la page index {state.get('next_page_index')}"
+        )
     print(f"DPE écrit dans : s3a://{bucket}/{page_prefix}*")
 
 def ingest_dvf():

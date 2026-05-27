@@ -281,6 +281,89 @@ def execute_schema(cursor):
         """
     )
 
+    # Garantit les FK commune_id même si les tables existaient déjà sans contrainte.
+    cursor.execute(
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint c
+                JOIN pg_class t ON t.oid = c.conrelid
+                JOIN pg_namespace n ON n.oid = t.relnamespace
+                WHERE n.nspname = 'public'
+                  AND t.relname = 'transactions'
+                  AND c.contype = 'f'
+                  AND pg_get_constraintdef(c.oid) LIKE 'FOREIGN KEY (commune_id) REFERENCES communes(code_insee)%'
+            ) THEN
+                ALTER TABLE transactions
+                ADD CONSTRAINT fk_transactions_commune_id
+                FOREIGN KEY (commune_id) REFERENCES communes(code_insee) NOT VALID;
+            END IF;
+
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint c
+                JOIN pg_class t ON t.oid = c.conrelid
+                JOIN pg_namespace n ON n.oid = t.relnamespace
+                WHERE n.nspname = 'public'
+                  AND t.relname = 'dpe'
+                  AND c.contype = 'f'
+                  AND pg_get_constraintdef(c.oid) LIKE 'FOREIGN KEY (commune_id) REFERENCES communes(code_insee)%'
+            ) THEN
+                ALTER TABLE dpe
+                ADD CONSTRAINT fk_dpe_commune_id
+                FOREIGN KEY (commune_id) REFERENCES communes(code_insee) NOT VALID;
+            END IF;
+
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint c
+                JOIN pg_class t ON t.oid = c.conrelid
+                JOIN pg_namespace n ON n.oid = t.relnamespace
+                WHERE n.nspname = 'public'
+                  AND t.relname = 'demographics_population'
+                  AND c.contype = 'f'
+                  AND pg_get_constraintdef(c.oid) LIKE 'FOREIGN KEY (commune_id) REFERENCES communes(code_insee)%'
+            ) THEN
+                ALTER TABLE demographics_population
+                ADD CONSTRAINT fk_demographics_population_commune_id
+                FOREIGN KEY (commune_id) REFERENCES communes(code_insee) NOT VALID;
+            END IF;
+
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint c
+                JOIN pg_class t ON t.oid = c.conrelid
+                JOIN pg_namespace n ON n.oid = t.relnamespace
+                WHERE n.nspname = 'public'
+                  AND t.relname = 'demographics_density'
+                  AND c.contype = 'f'
+                  AND pg_get_constraintdef(c.oid) LIKE 'FOREIGN KEY (commune_id) REFERENCES communes(code_insee)%'
+            ) THEN
+                ALTER TABLE demographics_density
+                ADD CONSTRAINT fk_demographics_density_commune_id
+                FOREIGN KEY (commune_id) REFERENCES communes(code_insee) NOT VALID;
+            END IF;
+
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint c
+                JOIN pg_class t ON t.oid = c.conrelid
+                JOIN pg_namespace n ON n.oid = t.relnamespace
+                WHERE n.nspname = 'public'
+                  AND t.relname = 'demographics_chomage'
+                  AND c.contype = 'f'
+                  AND pg_get_constraintdef(c.oid) LIKE 'FOREIGN KEY (commune_id) REFERENCES communes(code_insee)%'
+            ) THEN
+                ALTER TABLE demographics_chomage
+                ADD CONSTRAINT fk_demographics_chomage_commune_id
+                FOREIGN KEY (commune_id) REFERENCES communes(code_insee) NOT VALID;
+            END IF;
+        END $$;
+        """
+    )
+
 
 def prepare_postgres_schema(**_context):
     connection = get_postgres_connection()
@@ -329,6 +412,13 @@ def load_postgres_data(**_context):
                     insert_sql = f"INSERT INTO {table_name} ({column_list}) VALUES ({placeholders})"
                     cursor.executemany(insert_sql, rows)
                     print(f"{len(rows)} lignes chargées dans {table_name}")
+
+                # Valide les FK ajoutées en NOT VALID après chargement.
+                cursor.execute("ALTER TABLE transactions VALIDATE CONSTRAINT fk_transactions_commune_id")
+                cursor.execute("ALTER TABLE dpe VALIDATE CONSTRAINT fk_dpe_commune_id")
+                cursor.execute("ALTER TABLE demographics_population VALIDATE CONSTRAINT fk_demographics_population_commune_id")
+                cursor.execute("ALTER TABLE demographics_density VALIDATE CONSTRAINT fk_demographics_density_commune_id")
+                cursor.execute("ALTER TABLE demographics_chomage VALIDATE CONSTRAINT fk_demographics_chomage_commune_id")
     finally:
         connection.close()
 
