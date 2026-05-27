@@ -22,9 +22,95 @@ Afin d'absorber la charge des Giga-octets d'informations (transactions, recensem
 - Publication : chargement des données tabulaires dans PostgreSQL et des avis nettoyés dans MongoDB.
 - Exploitation : jobs ML et analyses qui consomment uniquement la couche curée.
 
+```mermaid
+flowchart LR
+	A[Sources publiques\nDVF, INSEE, ADEME, BPE] --> B[Airflow DAG d'ingestion]
+	C[Scraping avis web] --> B
+	B --> D[MinIO / raw]
+	D --> E[Spark clean_tabulaires\n+ clean_reviews\n+ ML_predictions]
+	E --> F[MinIO / processed]
+	F --> G[PostgreSQL\n+tables tabulaires]
+	F --> H[MongoDB\n+reviews_clean]
+	F --> I[MinIO\n+artefacts ML]
+```
+
 ## 4.2 Relations (ERD)
 
 La couche relationnelle finale s'organise autour de `communes`, puis des tables source-specific `transactions`, `demographics_population`, `demographics_density`, `demographics_chomage`, `revenue_disponible`, `dpe`, `bpe_equipment`, `bpe_rollups` et `bpe_evolution`.
+
+```mermaid
+erDiagram
+	COMMUNES ||--o{ TRANSACTIONS : reference
+	COMMUNES ||--o{ DEMOGRAPHICS_POPULATION : reference
+	COMMUNES ||--o{ DEMOGRAPHICS_DENSITY : reference
+	COMMUNES ||--o{ DEMOGRAPHICS_CHOMAGE : reference
+	COMMUNES ||--o{ DPE : reference
+
+	COMMUNES {
+		string code_insee PK
+		string nom
+		string code_postal
+		string dept
+		string dept_name
+		string region_code
+		string region
+		float latitude
+		float longitude
+		int population_actuelle
+	}
+
+	TRANSACTIONS {
+		string id PK
+		string commune_id FK
+		date date_transaction
+		float prix
+		float surface
+		float prix_m2
+		string type_bien
+		int nombre_pieces
+		string adresse
+		string code_postal
+	}
+
+	DEMOGRAPHICS_POPULATION {
+		int id PK
+		string commune_id FK
+		int annee
+		int population
+	}
+
+	DEMOGRAPHICS_DENSITY {
+		int id PK
+		string commune_id FK
+		int annee
+		string nom_territoire
+		float densite_population
+		float numerateur
+		float denominateur
+	}
+
+	DEMOGRAPHICS_CHOMAGE {
+		int id PK
+		string commune_id FK
+		int annee
+		float actifs_15_64
+		float chomeurs_15_64
+		float taux_chomage
+	}
+
+	DPE {
+		string id PK
+		string commune_id FK
+		string classe_energetique
+		string classe_ges
+		float emissions_co2
+		float consommation_energie
+		string type_batiment
+		int annee_construction
+		float surface
+		date date_etablissement
+	}
+```
 
 **Architecture NoSQL Associée (MongoDB)**
 - **Collection `reviews_clean`** : avis nettoyés et normalisés, chargés depuis `processed/reviews/clean_reviews.jsonl`.
@@ -53,7 +139,7 @@ La couche relationnelle finale s'organise autour de `communes`, puis des tables 
 
 - **Prédictions avec IA :** Estimer l'évolution à N+5 ans du m² basé sur le DPE et la démographie locale (Spark MLlib).
 - **Analyse des avis :** conservation des avis nettoyés et de la note pour un affichage simple des retours récents.
-- **DataViz Descriptive :** Croisement du DVF avec les revenus pour calculer l'indice d'accessibilité au logement.
+- **DataViz Descriptive :** Croisement du DVF avec les revenus pour calculer l'indice d'accessibilité au logement, exposé plus tard dans l'interface de visualisation et calculé depuis la base PostgreSQL/les vues analytiques, pas dans un DAG d'ingestion.
 
 ## 5.3 Niveaux de lecture
 
