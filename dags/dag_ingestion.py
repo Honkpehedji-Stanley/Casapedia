@@ -99,12 +99,26 @@ def dpe_next_url_from_response(response):
 
 
 def ingest_dpe():
-    ingest_dpe_batch(
-        DPE_EXPORT_URL,
-        pages_to_fetch=10_000,
-        batch_index=1,
-        total_batches=1,
-    )
+    settings = get_minio_settings()
+    client = get_minio_client()
+    bucket = ensure_bucket(client, settings["bucket"])
+
+    state_key = 'raw/dpe/_ingestion_state.json'
+    page_prefix = 'raw/dpe/dpe_logements_brut_page_'
+    existing_pages = [
+        key for key in [*list_dpe_page_objects(client, bucket, 'raw/dpe/')]
+        if key.startswith(page_prefix) and key.endswith('.csv')
+    ]
+
+    state = read_minio_json(client, bucket, state_key) or {
+        'next_url': DPE_EXPORT_URL,
+        'next_page_index': 1,
+    }
+
+    if existing_pages and state.get('next_page_index', 1) == 1:
+        state['next_page_index'] = len(existing_pages) + 1
+
+    download_dpe_resumable(client, bucket, state, state_key, page_prefix)
 
 def download_file(url, dest_folder, filename, timeout=None, chunk_size=None):
     """
@@ -436,72 +450,111 @@ def ingest_bpe_evolution():
     )
 
 
-def ingest_dpe_batch(start_url, pages_to_fetch, batch_index, total_batches):
-    settings = get_minio_settings()
-    client = get_minio_client()
-    bucket = ensure_bucket(client, settings["bucket"])
+def read_minio_json(client, bucket, object_key):
+    try:
+        response = client.get_object(Bucket=bucket, Key=object_key)
+        try:
+            return json.loads(response["Body"].read().decode("utf-8"))
+        finally:
+            response["Body"].close()
+    except Exception:
+        return None
 
-    object_key = f'raw/dpe/dpe_logements_brut_part_{batch_index:03d}_{total_batches:03d}.csv'
-    download_url = start_url
-    page_count = 0
-    line_count = 0
-    header_line = None
 
-    # Utiliser une session résiliente et retenter les pages individuellement
+def write_minio_json(client, bucket, object_key, payload):
+    buffer = BytesIO(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    upload_fileobj(client, bucket, object_key, buffer, content_type="application/json")
+
+
+def list_dpe_page_objects(client, bucket, prefix):
+    paginator = client.get_paginator("list_objects_v2")
+    keys = []
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for entry in page.get("Contents", []):
+            key = entry.get("Key")
+            if key:
+                keys.append(key)
+    return sorted(keys)
+
+
+def download_dpe_resumable(client, bucket, state, state_key, page_prefix):
     session = requests.Session()
     retries = Retry(total=5, backoff_factor=1, status_forcelist=(429, 500, 502, 503, 504), allowed_methods=frozenset(['GET']))
     adapter = HTTPAdapter(max_retries=retries)
     session.mount('https://', adapter)
     session.mount('http://', adapter)
 
+    current_url = state.get('next_url') or DPE_EXPORT_URL
+    current_page_index = int(state.get('next_page_index', 1))
+    total_downloaded_pages = 0
     per_page_sleep = float(os.getenv('CASAPEDIA_DPE_PAGE_SLEEP', '0'))
+    max_attempts_per_page = int(os.getenv('CASAPEDIA_DPE_PAGE_ATTEMPTS', '6'))
 
-    with tempfile.NamedTemporaryFile(mode='wb', suffix='-dpe_logements_brut.csv') as temp_file:
-        while download_url and page_count < pages_to_fetch:
-            print(f"Début du téléchargement DPE: {download_url}")
+    existing_objects = set(list_dpe_page_objects(client, bucket, page_prefix))
+
+    while current_url:
+        page_object_key = f"{page_prefix}{current_page_index:05d}.csv"
+        if page_object_key in existing_objects:
+            print(f"DPE page déjà présente, reprise: {page_object_key}")
+            response = None
             try:
-                response = session.get(download_url, stream=True, timeout=(10, 120))
+                response = session.get(current_url, stream=True, timeout=(10, 60), headers={"Accept-Encoding": "gzip"})
                 response.raise_for_status()
-            except Exception as error:
-                print(f"Erreur téléchargement page DPE: {error}")
-                # Laisser la session Retry tenter automatiquement; si on arrive ici, la page a échoué
-                raise
+                current_url = dpe_next_url_from_response(response)
+            finally:
+                if response is not None:
+                    response.close()
 
-            page_line_count = 0
-            for raw_line in response.iter_lines(decode_unicode=False):
-                if raw_line is None:
-                    continue
-                if page_line_count == 0:
-                    if header_line is None:
-                        header_line = raw_line
-                    elif raw_line == header_line:
+            current_page_index += 1
+            state['next_page_index'] = current_page_index
+            state['next_url'] = current_url
+            write_minio_json(client, bucket, state_key, state)
+            continue
+
+        for attempt in range(1, max_attempts_per_page + 1):
+            response = None
+            try:
+                print(f"Début du téléchargement DPE: {current_url}")
+                response = session.get(current_url, stream=True, timeout=(10, 300), headers={"Accept-Encoding": "gzip"})
+                response.raise_for_status()
+
+                buffer = BytesIO()
+                page_line_count = 0
+                for raw_line in response.iter_lines(chunk_size=64 * 1024, decode_unicode=False):
+                    if raw_line is None:
                         continue
+                    buffer.write(raw_line)
+                    buffer.write(b"\n")
+                    page_line_count += 1
 
-                temp_file.write(raw_line)
-                temp_file.write(b"\n")
-                page_line_count += 1
+                if page_line_count == 0:
+                    current_url = None
+                    break
 
-            if page_line_count == 0:
+                buffer.seek(0)
+                upload_fileobj(client, bucket, page_object_key, buffer, content_type='text/csv')
+
+                total_downloaded_pages += 1
+                current_page_index += 1
+                state['next_page_index'] = current_page_index
+                state['next_url'] = dpe_next_url_from_response(response)
+                write_minio_json(client, bucket, state_key, state)
+
+                existing_objects.add(page_object_key)
+                current_url = state['next_url']
+                time.sleep(per_page_sleep)
                 break
+            except Exception as error:
+                print(f"Erreur téléchargement page DPE (tentative {attempt}/{max_attempts_per_page}): {error}")
+                if attempt >= max_attempts_per_page:
+                    raise
+                time.sleep(min(30, 2 ** attempt))
+            finally:
+                if response is not None:
+                    response.close()
 
-            line_count += page_line_count
-            page_count += 1
-
-            download_url = dpe_next_url_from_response(response)
-
-            # Respecter limites et éviter raffût réseau
-            time.sleep(per_page_sleep)
-
-        temp_file.flush()
-        temp_file.seek(0)
-        if line_count == 0:
-            raise RuntimeError('Aucune ligne DPE téléchargée.')
-        upload_fileobj(client, bucket, object_key, temp_file, content_type='text/csv')
-
-    print(f"DPE - pages téléchargées: {page_count}")
-    print(f"DPE - lignes téléchargées: {line_count}")
-    print(f"DPE écrit dans : s3a://{bucket}/{object_key}")
-
+    print(f"DPE - pages téléchargées/reprises: {total_downloaded_pages}")
+    print(f"DPE écrit dans : s3a://{bucket}/{page_prefix}*")
 
 def ingest_dvf():
     downloaded_years = []
