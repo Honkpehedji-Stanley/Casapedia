@@ -9,7 +9,6 @@ from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from airflow import DAG
-from airflow.decorators import task
 from airflow.operators.python import PythonOperator
 from datetime import datetime, timedelta
 import tempfile
@@ -68,7 +67,6 @@ DPE_EXPORT_URL = os.getenv(
     'CASAPEDIA_DPE_EXPORT_URL',
     f'https://data.ademe.fr/data-fair/api/v1/datasets/{DPE_DATASET_ID}/lines?size=10000&format=csv',
 )
-DPE_PAGES_PER_TASK = int(os.getenv('CASAPEDIA_DPE_PAGES_PER_TASK', '25'))
 DVF_BASE_URL = os.getenv(
     'CASAPEDIA_DVF_BASE_URL',
     'https://files.data.gouv.fr/geo-dvf/latest/csv',
@@ -98,6 +96,15 @@ def dpe_next_url_from_response(response):
     if not next_link:
         return None
     return append_query_param(next_link, 'header', 'false')
+
+
+def ingest_dpe():
+    ingest_dpe_batch(
+        DPE_EXPORT_URL,
+        pages_to_fetch=10_000,
+        batch_index=1,
+        total_batches=1,
+    )
 
 def download_file(url, dest_folder, filename, timeout=None, chunk_size=None):
     """
@@ -447,7 +454,7 @@ def ingest_dpe_batch(start_url, pages_to_fetch, batch_index, total_batches):
     session.mount('https://', adapter)
     session.mount('http://', adapter)
 
-    per_page_sleep = float(os.getenv('CASAPEDIA_DPE_PAGE_SLEEP', '0.1'))
+    per_page_sleep = float(os.getenv('CASAPEDIA_DPE_PAGE_SLEEP', '0'))
 
     with tempfile.NamedTemporaryFile(mode='wb', suffix='-dpe_logements_brut.csv') as temp_file:
         while download_url and page_count < pages_to_fetch:
@@ -494,44 +501,6 @@ def ingest_dpe_batch(start_url, pages_to_fetch, batch_index, total_batches):
     print(f"DPE - pages téléchargées: {page_count}")
     print(f"DPE - lignes téléchargées: {line_count}")
     print(f"DPE écrit dans : s3a://{bucket}/{object_key}")
-
-
-def plan_dpe_batches(total_pages, pages_per_task):
-    session = requests.Session()
-    retries = Retry(total=5, backoff_factor=1, status_forcelist=(429, 500, 502, 503, 504), allowed_methods=frozenset(['GET']))
-    adapter = HTTPAdapter(max_retries=retries)
-    session.mount('https://', adapter)
-    session.mount('http://', adapter)
-
-    batches = []
-    batch_index = 0
-    current_page = 0
-    batch_start_url = append_query_param(DPE_EXPORT_URL, 'page', 1)
-    download_url = batch_start_url
-
-    while download_url and current_page < total_pages:
-        batch_pages = 0
-        while download_url and batch_pages < pages_per_task and current_page < total_pages:
-            try:
-                response = session.get(download_url, stream=True, timeout=(10, 60))
-                response.raise_for_status()
-            except Exception as error:
-                raise RuntimeError(f"Impossible de planifier les lots DPE à la page {current_page + 1}: {error}")
-
-            current_page += 1
-            batch_pages += 1
-            download_url = dpe_next_url_from_response(response)
-            response.close()
-
-        batch_index += 1
-        batches.append({
-            'batch_index': batch_index,
-            'start_url': batch_start_url,
-            'pages_to_fetch': batch_pages,
-        })
-        batch_start_url = download_url
-
-    return batches
 
 
 def ingest_dvf():
@@ -593,26 +562,11 @@ with DAG(
         python_callable=ingest_dvf,
     )
 
-    @task(task_id='plan_dpe_batches')
-    def plan_dpe_batches_task():
-        total_pages = get_dpe_total_pages()
-        batches = plan_dpe_batches(total_pages, DPE_PAGES_PER_TASK)
-        total_batches = len(batches)
-        for batch in batches:
-            batch['total_batches'] = total_batches
-        return batches
-
-    @task(task_id='download_dpe_batch')
-    def download_dpe_batch_task(batch):
-        ingest_dpe_batch(
-            batch['start_url'],
-            batch['pages_to_fetch'],
-            batch['batch_index'],
-            batch['total_batches'],
-        )
-
-    dpe_batch_plan = plan_dpe_batches_task()
-    download_dpe_batch_task.expand(batch=dpe_batch_plan)
+    ingest_dpe_task = PythonOperator(
+        task_id='download_dpe',
+        python_callable=ingest_dpe,
+        execution_timeout=timedelta(hours=4),
+    )
 
     # Tâche 5 : Ingestion des avis Ville-Idéale
     ingest_ville_ideale_reviews_task = PythonOperator(
@@ -656,6 +610,7 @@ with DAG(
         ingest_communes,
         ingest_insee,
         ingest_dvf_task,
+        ingest_dpe_task,
         ingest_ville_ideale_reviews_task,
         ingest_villesavivre_reviews_task,
         ingest_insee_revenue_task,
@@ -664,5 +619,3 @@ with DAG(
         ingest_bpe_2024_task,
         ingest_bpe_evolution_task,
     ]
-
-    dpe_batch_plan
