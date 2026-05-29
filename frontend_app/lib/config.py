@@ -3,11 +3,15 @@
 Lit les variables d'environnement (mêmes clés que le reste du projet : Postgres,
 MongoDB, MinIO) et expose des constantes de domaine partagées par toutes les pages.
 """
-import os
 
+import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# Chargement robuste du .env : chemin absolu vers la racine projet,
+# indépendant du CWD au moment où Streamlit importe le module.
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(_PROJECT_ROOT / ".env")
 
 
 # --- Niveaux de lecture multi-échelles (project.pdf : national -> communal) ---
