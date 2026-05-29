@@ -30,8 +30,8 @@ CREATE TABLE IF NOT EXISTS transactions (
     commune_id VARCHAR(5) NOT NULL,
     date_transaction DATE NOT NULL,
     prix DECIMAL(15, 2) NOT NULL,
-    surface DECIMAL(10, 2),
-    prix_m2 DECIMAL(10, 2),
+    surface DECIMAL(15, 4),
+    prix_m2 DECIMAL(15, 4),
     type_bien VARCHAR(50) NOT NULL, -- 'appartement', 'maison', 'terrain', etc.
     nombre_pieces INTEGER,
     nature_mutation VARCHAR(100), -- 'Vente', 'Vente en l'état futur d'achèvement', etc.
@@ -74,11 +74,11 @@ CREATE TABLE IF NOT EXISTS dpe (
     commune_id VARCHAR(5) NOT NULL,
     classe_energetique VARCHAR(1) NOT NULL CHECK (classe_energetique IN ('A', 'B', 'C', 'D', 'E', 'F', 'G')),
     classe_ges VARCHAR(1) CHECK (classe_ges IN ('A', 'B', 'C', 'D', 'E', 'F', 'G')),
-    emissions_co2 DECIMAL(10, 2), -- kg CO2/m²/an
-    consommation_energie DECIMAL(10, 2), -- kWh/m²/an
+    emissions_co2 DECIMAL(15, 4), -- kg CO2/m²/an
+    consommation_energie DECIMAL(15, 4), -- kWh/m²/an
     type_batiment VARCHAR(50), -- 'appartement', 'maison', etc.
     annee_construction INTEGER,
-    surface DECIMAL(10, 2),
+    surface DECIMAL(15, 4),
     date_etablissement DATE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (commune_id) REFERENCES communes(code_insee) ON DELETE CASCADE
