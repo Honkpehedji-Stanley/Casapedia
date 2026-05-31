@@ -6,9 +6,51 @@ from pyspark.ml.feature import Imputer, OneHotEncoder, StringIndexer, VectorAsse
 from pyspark.ml.regression import LinearRegression
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import avg, coalesce, col, count, month, to_date, trim, year
+from pyspark.sql.types import DoubleType, StringType, StructField, StructType
 
 S3_BUCKET = os.getenv("CASAPEDIA_S3_BUCKET", "casapedia-datalake")
 PROCESSED_DIR = f"s3a://{S3_BUCKET}/processed"
+
+TRANSACTIONS_SCHEMA = StructType([
+    StructField("id", StringType(), True),
+    StructField("commune_id", StringType(), True),
+    StructField("date_transaction", StringType(), True),
+    StructField("prix", DoubleType(), True),
+    StructField("surface", DoubleType(), True),
+    StructField("prix_m2", DoubleType(), True),
+    StructField("type_bien", StringType(), True),
+    StructField("nombre_pieces", DoubleType(), True),
+    StructField("adresse", StringType(), True),
+    StructField("code_postal", StringType(), True),
+])
+
+COMMUNES_SCHEMA = StructType([
+    StructField("code_insee", StringType(), True),
+    StructField("latitude", DoubleType(), True),
+    StructField("longitude", DoubleType(), True),
+])
+
+DEMOGRAPHICS_SCHEMA = StructType([
+    StructField("commune_id", StringType(), True),
+    StructField("population", DoubleType(), True),
+])
+
+DENSITY_SCHEMA = StructType([
+    StructField("commune_id", StringType(), True),
+    StructField("densite_population", DoubleType(), True),
+])
+
+UNEMPLOYMENT_SCHEMA = StructType([
+    StructField("commune_id", StringType(), True),
+    StructField("taux_chomage", DoubleType(), True),
+])
+
+DPE_SCHEMA = StructType([
+    StructField("id", StringType(), True),
+    StructField("commune_id", StringType(), True),
+    StructField("emissions_co2", DoubleType(), True),
+    StructField("consommation_energie", DoubleType(), True),
+])
 
 
 def log_step(message):
@@ -29,31 +71,54 @@ def main():
     unemployment_path = os.environ.get("CASAPEDIA_CHOMAGE_INPUT", f"{PROCESSED_DIR}/demographics/chomage_commune.jsonl")
     dpe_path = os.environ.get("CASAPEDIA_DPE_INPUT", f"{PROCESSED_DIR}/dpe/dpe.jsonl")
     output_root = os.environ.get("CASAPEDIA_ML_OUTPUT", f"{PROCESSED_DIR}/ml_predictions")
+    sample_fraction = float(os.environ.get("CASAPEDIA_ML_SAMPLE_FRACTION", "0.001"))
+    max_training_rows = int(os.environ.get("CASAPEDIA_ML_MAX_TRAINING_ROWS", "10000"))
+    max_iter = int(os.environ.get("CASAPEDIA_ML_MAX_ITER", "10"))
+    shuffle_partitions = os.environ.get("CASAPEDIA_ML_SHUFFLE_PARTITIONS", "16")
+    default_parallelism = os.environ.get("CASAPEDIA_ML_DEFAULT_PARALLELISM", "16")
 
     log_step("Initialisation de SparkSession pour le job ML...")
-    spark = SparkSession.builder.appName("Casapedia_ML_Predictions").getOrCreate()
+    spark = (
+        SparkSession.builder
+        .appName("Casapedia_ML_Predictions")
+        .config("spark.sql.shuffle.partitions", shuffle_partitions)
+        .config("spark.default.parallelism", default_parallelism)
+        .getOrCreate()
+    )
 
     log_step(f"Lecture transactions depuis {transactions_path}")
-    transactions = spark.read.json(transactions_path)
+    transactions = spark.read.schema(TRANSACTIONS_SCHEMA).json(transactions_path)
+    log_step("Transactions chargees")
+    if 0 < sample_fraction < 1:
+        log_step(f"Sous-echantillonnage des transactions brutes avec fraction={sample_fraction}")
+        transactions = transactions.sample(withReplacement=False, fraction=sample_fraction, seed=42)
+    else:
+        log_step("Aucun sous-echantillonnage applique aux transactions")
+    log_step("Transactions pretes apres sous-echantillonnage")
     log_step(f"Lecture communes depuis {communes_path}")
-    communes = spark.read.json(communes_path)
+    communes = spark.read.schema(COMMUNES_SCHEMA).json(communes_path)
+    log_step("Communes chargees")
     log_step(f"Lecture demographics depuis {demographics_path}")
-    demographics = spark.read.json(demographics_path)
+    demographics = spark.read.schema(DEMOGRAPHICS_SCHEMA).json(demographics_path)
+    log_step("Demographics charges")
 
     def read_optional_json(path, schema_definition):
         try:
-            return spark.read.json(path)
+            return spark.read.schema(schema_definition).json(path)
         except Exception:
             return spark.createDataFrame([], schema_definition)
 
     log_step(f"Lecture density depuis {density_path}")
-    density = read_optional_json(density_path, "commune_id string, densite_population double")
+    density = read_optional_json(density_path, DENSITY_SCHEMA)
+    log_step("Density chargee")
     log_step(f"Lecture unemployment depuis {unemployment_path}")
-    unemployment = read_optional_json(unemployment_path, "commune_id string, taux_chomage double")
+    unemployment = read_optional_json(unemployment_path, UNEMPLOYMENT_SCHEMA)
+    log_step("Unemployment charge")
 
     try:
         log_step(f"Lecture DPE depuis {dpe_path}")
-        dpe = spark.read.json(dpe_path)
+        dpe = spark.read.schema(DPE_SCHEMA).json(dpe_path)
+        log_step("DPE charge")
         dpe_agg = dpe.groupBy("commune_id").agg(
             avg("emissions_co2").alias("avg_emissions_co2"),
             avg("consommation_energie").alias("avg_consumption_energie"),
@@ -107,6 +172,10 @@ def main():
         trim(col("code_postal")).alias("code_postal"),
     ).where(col("prix_m2").isNotNull() & (col("prix_m2") > 0) & col("surface").isNotNull())
 
+    log_step(f"Limitation du jeu d'entrainement à {max_training_rows} lignes maximum")
+    training_base = training_base.limit(max_training_rows)
+    log_step("Jeu d'entrainement limite et pret pour les jointures")
+
     log_step("Jointures des jeux de contexte")
     training = training_base.join(communes_features, on="commune_id", how="left") \
         .join(demographics_features, on="commune_id", how="left") \
@@ -142,12 +211,18 @@ def main():
 
     assembled_features = [f"{column_name}_imputed" for column_name in numeric_columns] + ["type_bien_vector"]
     assembler = VectorAssembler(inputCols=assembled_features, outputCol="features")
-    regressor = LinearRegression(featuresCol="features", labelCol="prix_m2", predictionCol="predicted_prix_m2")
+    regressor = LinearRegression(
+        featuresCol="features",
+        labelCol="prix_m2",
+        predictionCol="predicted_prix_m2",
+        maxIter=max_iter,
+    )
 
     pipeline = Pipeline(stages=[imputer, type_indexer, type_encoder, assembler, regressor])
 
     log_step("Découpage train/test")
     train_df, test_df = training.randomSplit([0.8, 0.2], seed=42)
+    log_step("Jeux train et test prêts")
     log_step("Entraînement du modèle MLlib")
     model = pipeline.fit(train_df)
     log_step("Génération des prédictions sur le jeu de test")
