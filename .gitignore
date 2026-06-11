@@ -20,6 +20,8 @@ eggs/
 .eggs/
 lib/
 lib64/
+!frontend_app/lib/
+frontend_app/lib/__pycache__/
 parts/
 sdist/
 var/
