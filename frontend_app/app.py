@@ -11,23 +11,23 @@ import streamlit as st
 
 st.set_page_config(
     page_title="Casapedia",
-    page_icon="🏠",
+    page_icon=":material/home:",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 PAGES = {
     "Exploration": [
-        st.Page("pages/dashboard.py", title="Dashboard", icon="🏠", default=True),
-        st.Page("pages/carte.py", title="Carte", icon="🗺️"),
-        st.Page("pages/comparateur.py", title="Comparateur", icon="⚖️"),
-        st.Page("pages/fiche.py", title="Fiche territoriale", icon="📍"),
+        st.Page("pages/dashboard.py", title="Tableau de bord", icon=":material/home:", default=True),
+        st.Page("pages/carte.py", title="Carte", icon=":material/map:"),
+        st.Page("pages/comparateur.py", title="Comparateur", icon=":material/balance:"),
+        st.Page("pages/fiche.py", title="Fiche territoriale", icon=":material/location_on:"),
     ],
     "Analyses": [
-        st.Page("pages/nlp.py", title="Analyse NLP", icon="💬"),
+        st.Page("pages/nlp.py", title="Analyse NLP", icon=":material/chat:"),
     ],
     "À propos": [
-        st.Page("pages/methodologie.py", title="Méthodologie", icon="📖"),
+        st.Page("pages/methodologie.py", title="Méthodologie", icon=":material/menu_book:"),
     ],
 }
 

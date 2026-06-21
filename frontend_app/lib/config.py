@@ -36,11 +36,13 @@ DPE_CLASSES = ["A", "B", "C", "D", "E", "F", "G"]
 def postgres_settings():
     """Paramètres de connexion PostgreSQL (mêmes défauts que database/db_manager.py)."""
     return {
-        "host": os.getenv("DB_HOST", "localhost"),
-        "port": os.getenv("DB_PORT", "5432"),
+        # Le frontend Streamlit tourne sur l'hôte en local, donc le Postgres du
+        # stack Docker doit être visé via le port publié sur la machine.
+        "host": os.getenv("DB_HOST", "127.0.0.1"),
+        "port": os.getenv("DB_PORT", "5433"),
         "database": os.getenv("DB_NAME", "casapedia_db"),
-        "user": os.getenv("DB_USER", "postgres"),
-        "password": os.getenv("DB_PASSWORD", "postgres"),
+        "user": os.getenv("DB_USER", "casapedia_user"),
+        "password": os.getenv("DB_PASSWORD", "casapedia_password"),
     }
 
 
