@@ -685,6 +685,14 @@ def load_postgres_data(**_context):
         connection.close()
 
 
+def compute_sentiment_analysis(**_context):
+    _spark_jobs_dir = str(AIRFLOW_HOME / "spark_jobs")
+    if _spark_jobs_dir not in sys.path:
+        sys.path.insert(0, _spark_jobs_dir)
+    import sentiment_reviews
+    sentiment_reviews.run()
+
+
 def load_reviews_to_mongo(**_context):
     records = read_jsonl_from_minio("processed/reviews/clean_reviews.jsonl")
     if not records:
@@ -744,4 +752,10 @@ with DAG(
         python_callable=load_reviews_to_mongo,
     )
 
+    compute_sentiment = PythonOperator(
+        task_id="compute_sentiment_analysis",
+        python_callable=compute_sentiment_analysis,
+    )
+
     prepare_schema >> [load_postgres, load_mongo]
+    load_mongo >> compute_sentiment

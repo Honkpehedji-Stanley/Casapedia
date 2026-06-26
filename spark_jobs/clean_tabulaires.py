@@ -143,7 +143,10 @@ def extract_archive_members(source_path, destination_dir):
 
 
 def first_csv_path(directory_path):
-    csv_candidates = sorted(Path(directory_path).rglob("*.csv"))
+    csv_candidates = sorted(
+        p for p in Path(directory_path).rglob("*")
+        if p.suffix.lower() == ".csv"
+    )
     if not csv_candidates:
         raise FileNotFoundError(f"Aucun CSV trouvé dans {directory_path}")
     return str(csv_candidates[0])
@@ -452,7 +455,10 @@ def main():
                 "processed_year": 2023,
                 "note": "Population communale du fichier INSEE de référence; le millésime est fixé explicitement au traitement.",
             })
-
+        except Exception as error:
+            print(f"Données demographie_insee introuvables ou incomplètes: {error}")
+        
+        try:
             # 4.2 Densité communale
             print("Traitement de densite_population_communes.csv (densité communale)...")
             local_density_path = os.path.join(temp_dir, "densite_population_communes.csv")
@@ -476,8 +482,12 @@ def main():
                 "processed_year": "2021",
                 "note": "Densité de population par commune issue de data.gouv / INSEE; la source porte son année dans la colonne annee.",
             })
+        except Exception as error:
+            print(f"Données densité population introuvables ou incomplètes: {error}")
 
+        try:
             # 4.3 Chômage / population active
+            # Source : base-cc-emploi-pop-active-2022-COM (INSEE RP2022, format base communale)
             print("Traitement de population_active_chomage_2022.zip (population active et chômage)...")
             local_unemployment_path = os.path.join(temp_dir, "population_active_chomage_2022.zip")
             local_unemployment_extract_dir = os.path.join(temp_dir, "unemployment_extract")
@@ -488,45 +498,27 @@ def main():
             extract_archive_members(local_unemployment_path, local_unemployment_extract_dir)
             unemployment_csv_path = first_csv_path(local_unemployment_extract_dir)
             df_unemployment = spark.read.csv(unemployment_csv_path, header=True, sep=";")
-            df_unemployment_clean = df_unemployment.select(
-                trim(col("GEO")).alias("commune_id"),
-                trim(col("GEO_OBJECT")).alias("geo_object"),
-                trim(col("EMPSTA_ENQ")).alias("statut_emploi"),
-                trim(col("AGE")).alias("age"),
-                trim(col("PCS")).alias("pcs"),
-                trim(col("RP_MEASURE")).alias("mesure"),
-                trim(col("FREQ")).alias("frequence"),
-                col("TIME_PERIOD").cast("int").alias("annee"),
-                col("OBS_VALUE").cast("double").alias("valeur")
-            )
-            df_unemployment_communes = df_unemployment_clean.where(
-                (col("geo_object") == "COM") &
-                (col("age") == "Y15T64") &
-                (col("pcs") == "_T") &
-                (col("frequence") == "A") &
-                (col("mesure") == "POP") &
-                (col("statut_emploi").isin("1T2", "2"))
-            )
-
-            taux_chomage = df_unemployment_communes.groupBy("commune_id", "annee").pivot("statut_emploi", ["1T2", "2"]).agg(spark_sum("valeur")).na.fill(0)
-            taux_chomage = taux_chomage.select(
-                col("commune_id"),
-                col("annee"),
-                col("1T2").alias("actifs_15_64"),
-                col("2").alias("chomeurs_15_64"),
-            ).withColumn(
+            taux_chomage = df_unemployment.select(
+                lpad(trim(col("CODGEO")), 5, "0").alias("commune_id"),
+                col("P22_ACT1564").cast("double").alias("actifs_15_64"),
+                col("P22_CHOM1564").cast("double").alias("chomeurs_15_64"),
+            ).withColumn("annee", lit(2022)) \
+             .withColumn(
                 "taux_chomage",
                 when(col("actifs_15_64") > 0, col("chomeurs_15_64") / col("actifs_15_64")).otherwise(None)
             )
             print(f"Chômage - lignes sources: {df_unemployment.count()}")
-            print_year_coverage(df_unemployment, "TIME_PERIOD", "Chômage")
+            print("Chômage - année de traitement fixée par le job: 2022")
             write_jsonl_to_minio(taux_chomage.dropna(subset=["commune_id"]), "processed/demographics", "chomage_commune.jsonl")
             source_qa["sources"].append({
                 "file": "raw/insee/population_active_chomage_2022.zip",
                 "processed_year": 2022,
-                "note": "Taux de chômage calculé comme chômeurs / actifs 15-64 ans à partir des indicateurs POP du fichier INSEE.",
+                "note": "Taux de chômage calculé comme chômeurs / actifs 15-64 ans (P22_CHOM1564 / P22_ACT1564) à partir de la base communale INSEE RP2022.",
             })
+        except Exception as error:
+            print(f"Données population_active_chomage_2022 introuvables ou incomplètes: {error}")
 
+        try:
             # 4.4 Revenu disponible des ménages
             print("Traitement de revenu_disponible_menages_2023.zip (revenu disponible)...")
             local_revenue_path = os.path.join(temp_dir, "revenu_disponible_menages_2023.zip")
@@ -560,7 +552,10 @@ def main():
                 "processed_year": 2023,
                 "note": "Revenu disponible des ménages à un niveau agrégé ménages/territoires; la source ne porte pas un code commune comme les autres fichiers communaux.",
             })
+        except Exception as error:
+            print(f"Données demographie_insee introuvables ou incomplètes: {error}")
 
+        try:
             # 4.5 Base permanente des équipements (BPE)
             print("Traitement de bpe_2024.zip (équipements et services)...")
             local_bpe_path = os.path.join(temp_dir, "bpe_2024.zip")
@@ -625,7 +620,10 @@ def main():
                 "processed_year": 2024,
                 "note": "Dénombrement BPE communal et géolocalisé couvrant services, commerces, enseignement, santé, transports, sports et culture.",
             })
+        except Exception as error:
+            print(f"Données bpe_2024 introuvables ou incomplètes: {error}")
 
+        try:
             # 4.6 Évolution BPE
             print("Traitement de bpe_evolution_2019_2024.zip (évolution des équipements)...")
             local_bpe_evolution_path = os.path.join(temp_dir, "bpe_evolution_2019_2024.zip")
@@ -663,7 +661,7 @@ def main():
                 "insee_source_qa.json",
             )
         except Exception as error:
-            print(f"Données INSEE complémentaires introuvables ou incomplètes: {error}")
+            print(f"Données bpe_evolution_2019_2024 introuvables ou incomplètes: {error}")
         
     print("Traitement Big Data PySpark terminé avec succès !")
     spark.stop()

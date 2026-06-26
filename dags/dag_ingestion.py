@@ -48,7 +48,7 @@ INSEE_REVENUE_URL = os.getenv(
 )
 INSEE_UNEMPLOYMENT_URL = os.getenv(
     'CASAPEDIA_INSEE_UNEMPLOYMENT_URL',
-    'https://api.insee.fr/melodi/file/DS_RP_EMPLOI_LR_COMP/DS_RP_EMPLOI_LR_COMP_2022_CSV_FR',
+    'https://www.insee.fr/fr/statistiques/fichier/8581444/base-cc-emploi-pop-active-2022_csv.zip',
 )
 INSEE_DENSITY_URL = os.getenv(
     'CASAPEDIA_INSEE_DENSITY_URL',
@@ -269,6 +269,23 @@ def parse_city_name_from_page(page_html):
     return city_name, city_code
 
 
+def parse_city_from_url(city_url, separator='-'):
+    """Extract city_name and city_code from a city page URL.
+
+    Works for both villesavivre.fr (/saint-etienne-42218/, separator='-')
+    and ville-ideale.fr (/saint_etienne_42218, separator='_').
+    The 5-digit code is the INSEE commune code (commune_id downstream).
+    """
+    path = urlsplit(city_url).path.strip('/')
+    match = re.search(rf'^(.+){re.escape(separator)}(\d{{5}})$', path)
+    if not match:
+        return None, None
+    slug = match.group(1)
+    city_code = match.group(2)
+    city_name = re.sub(r'[-_]+', ' ', slug).title()
+    return city_name, city_code
+
+
 def scrape_ville_ideale_reviews():
     city_links = collect_city_links(VILLE_IDEALE_SEED_PAGES, r"/[a-z0-9\-]+_[0-9]{5}")
     city_links = city_links[:REVIEWS_CITY_LIMIT]
@@ -293,7 +310,9 @@ def scrape_ville_ideale_reviews():
             print(f"Ville-Idéale: page ignorée {city_url} ({error})")
             continue
 
-        city_name, city_code = parse_city_name_from_page(page_html)
+        city_name, city_code = parse_city_from_url(city_url, separator='_')
+        if not city_name:
+            city_name, city_code = parse_city_name_from_page(page_html)
         review_blocks = re.findall(r'<div class="comm".*?>(.*?)<div class="interact"', page_html, flags=re.S)
 
         for block in review_blocks:
@@ -324,6 +343,7 @@ def scrape_ville_ideale_reviews():
                 "site": "ville-ideale",
                 "city_name": city_name,
                 "city_code": city_code,
+                "commune_id": city_code,
                 "source_url": city_url,
                 "review_date": strip_tags(date_match.group(1)) if date_match else None,
                 "author": strip_tags(author_match.group(1)) if author_match else None,
@@ -350,7 +370,9 @@ def scrape_villesavivre_reviews():
             print(f"Villes à Vivre: page ignorée {city_url} ({error})")
             continue
 
-        city_name, city_code = parse_city_name_from_page(page_html)
+        city_name, city_code = parse_city_from_url(city_url, separator='-')
+        if not city_name:
+            city_name, city_code = parse_city_name_from_page(page_html)
         review_section_match = re.search(r'<section class="comment" id="reviews".*?</section>', page_html, flags=re.S)
         if not review_section_match:
             continue
@@ -388,6 +410,7 @@ def scrape_villesavivre_reviews():
                 "site": "villesavivre",
                 "city_name": city_name,
                 "city_code": city_code,
+                "commune_id": city_code,
                 "source_url": city_url,
                 "review_date": strip_tags(date_match.group(1)) if date_match else None,
                 "author": strip_tags(author_match.group(1)) if author_match else None,
