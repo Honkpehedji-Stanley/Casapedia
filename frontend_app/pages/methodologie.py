@@ -8,9 +8,12 @@ import streamlit as st
 
 from lib import formatting as fmt
 from lib import queries
+from lib import theme
 
-st.title("Méthodologie")
-st.caption("Sources de données · formules · état du pipeline")
+theme.topbar(
+    "Méthodologie",
+    "Sources · formules · santé des données",
+)
 
 st.markdown(
     """
@@ -105,7 +108,7 @@ import pandas as pd  # noqa: E402
 
 st.dataframe(
     pd.DataFrame(sources),
-    use_container_width=True,
+    width="stretch",
     hide_index=True,
 )
 
@@ -196,11 +199,11 @@ else:
     health_display["Lignes"] = health_display["Lignes"].map(_format_lignes)
 
     st.dataframe(
-        health_display.style.applymap(_style_statut, subset=["Statut"]),
-        use_container_width=True,
+        health_display.style.map(_style_statut, subset=["Statut"]),
+        width="stretch",
         hide_index=True,
     )
 
-st.caption(
+theme.footer(
     "Source : PostgreSQL `casapedia_db` · MongoDB `casapedia.reviews_clean` · pipeline Airflow."
 )

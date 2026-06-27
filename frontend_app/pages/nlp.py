@@ -7,23 +7,16 @@ Dépend de spark_jobs/sentiment_reviews.py (collections nlp_sentiments / nlp_the
 import re
 from collections import Counter
 
+import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
 from lib import formatting as fmt
 from lib import queries
+from lib import theme
 
-PALETTE = [
-    "#2B59C3",
-    "#4C78A8",
-    "#72B7B2",
-    "#54A24B",
-    "#EECA3B",
-    "#F58518",
-    "#E45756",
-    "#B279A2",
-]
+PALETTE = theme.PALETTE
 
 # Mots vides français minimalistes (sans dépendance NLTK)
 STOPWORDS_FR = {
@@ -62,8 +55,10 @@ def _rating_label(r) -> str:
 
 
 # ── Interface ────────────────────────────────────────────────────────────────
-st.title("Avis et analyse textuelle")
-st.caption("Exploration des avis habitants · sentiment et mots-clés")
+theme.topbar(
+    "Analyse des avis habitants",
+    "Sentiment (lexique FEEL) · mots-clés · thèmes",
+)
 
 st.markdown(
     "Analyse des avis collectés sur les communes françaises. "
@@ -101,8 +96,6 @@ if df.empty:
     st.info("Aucun avis ne correspond aux filtres sélectionnés.")
     st.stop()
 
-import pandas as pd  # noqa: E402 (import tardif pour éviter l'erreur si df vide)
-
 df["rating_num"] = pd.to_numeric(df["rating"], errors="coerce")
 df["sentiment"] = df["rating_num"].map(_rating_label)
 
@@ -130,7 +123,7 @@ with left:
     st.subheader("Répartition des sentiments")
     sent_counts = df["sentiment"].value_counts().reset_index()
     sent_counts.columns = ["Sentiment", "Nombre"]
-    color_map = {"Positif": "#54A24B", "Neutre": "#EECA3B", "Négatif": "#E45756", "Inconnu": "#CCCCCC"}
+    color_map = theme.SENTIMENT_COLORS
     fig_sent = px.pie(
         sent_counts,
         names="Sentiment",
@@ -145,7 +138,7 @@ with left:
         hovertemplate="<b>%{label}</b><br>%{value} avis<extra></extra>",
     )
     fig_sent.update_layout(margin=dict(l=0, r=0, t=10, b=0), showlegend=False)
-    st.plotly_chart(fig_sent, use_container_width=True)
+    st.plotly_chart(theme.style_fig(fig_sent), width="stretch")
 
 with right:
     st.subheader("Distribution des notes")
@@ -165,7 +158,7 @@ with right:
             yaxis_title="Nombre d'avis",
             bargap=0.05,
         )
-        st.plotly_chart(fig_hist, use_container_width=True)
+        st.plotly_chart(theme.style_fig(fig_hist), width="stretch")
 
 # ── Nuage de mots (fréquences) ───────────────────────────────────────────────
 st.divider()
@@ -194,7 +187,7 @@ with tab_all:
             coloraxis_showscale=False,
             yaxis_title=None,
         )
-        st.plotly_chart(fig_wf, use_container_width=True)
+        st.plotly_chart(theme.style_fig(fig_wf), width="stretch")
     else:
         st.info("Aucun texte disponible pour l'analyse.")
 
@@ -218,7 +211,7 @@ with tab_pos:
             coloraxis_showscale=False,
             yaxis_title=None,
         )
-        st.plotly_chart(fig_p, use_container_width=True)
+        st.plotly_chart(theme.style_fig(fig_p), width="stretch")
     else:
         st.info("Aucun avis positif disponible.")
 
@@ -242,7 +235,7 @@ with tab_neg:
             coloraxis_showscale=False,
             yaxis_title=None,
         )
-        st.plotly_chart(fig_n, use_container_width=True)
+        st.plotly_chart(theme.style_fig(fig_n), width="stretch")
     else:
         st.info("Aucun avis négatif disponible.")
 
@@ -259,6 +252,6 @@ display_labels = {
     "source": "Source",
 }
 df_display = df[display_cols].rename(columns=display_labels).head(50)
-st.dataframe(df_display, use_container_width=True, hide_index=True)
+st.dataframe(df_display, width="stretch", hide_index=True)
 
-st.caption("Source : MongoDB `casapedia.reviews_clean` · scraping web · pipeline Airflow.")
+theme.footer("Source : MongoDB `casapedia.reviews_clean` · scraping web · pipeline Airflow.")

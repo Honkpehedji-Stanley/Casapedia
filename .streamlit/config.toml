@@ -1,0 +1,9 @@
+# Thème global Casapedia — "Epitech blue" (clair)
+# Lu par `streamlit run` depuis la racine du projet.
+[theme]
+base = "light"
+primaryColor = "#2B59C3"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F6FB"
+textColor = "#1E293B"
+font = "sans serif"
