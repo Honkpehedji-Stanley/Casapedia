@@ -16,6 +16,7 @@ Périmètre :
 
 import pandas as pd
 import streamlit as st
+from pandas.errors import DatabaseError as PandasDatabaseError
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -26,9 +27,18 @@ _TTL = 3600
 
 
 def _read_sql(query, params=None):
+    """Exécute une requête et renvoie un DataFrame.
+
+    Dégradation gracieuse : si la base est injoignable OU si une table n'existe
+    pas encore (pipeline pas terminé), renvoie un DataFrame vide plutôt que de
+    propager l'erreur. Les pages testent déjà `.empty` et affichent un message.
+    """
     engine = get_engine()
-    with engine.connect() as conn:
-        return pd.read_sql(text(query), conn, params=params or {})
+    try:
+        with engine.connect() as conn:
+            return pd.read_sql(text(query), conn, params=params or {})
+    except (SQLAlchemyError, PandasDatabaseError):
+        return pd.DataFrame()
 
 
 def _scalar(value):
@@ -77,12 +87,20 @@ def national_kpis() -> dict:
     #   SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY valeur) AS revenu_median
     #   FROM revenue_disponible WHERE valeur IS NOT NULL
 
+    # Tables pas encore chargées (pipeline en cours) -> KPI neutres.
+    if tx.empty:
+        return {
+            "nb_transactions": None,
+            "prix_median": None,
+            "prix_m2_median": None,
+            "population": None,
+        }
     row = tx.iloc[0]
     return {
         "nb_transactions": _scalar(row["nb_transactions"]),
         "prix_median": _scalar(row["prix_median"]),
         "prix_m2_median": _scalar(row["prix_m2_median"]),
-        "population": _scalar(pop.iloc[0]["population"]),
+        "population": _scalar(pop.iloc[0]["population"]) if not pop.empty else None,
     }
 
 
@@ -150,6 +168,8 @@ def map_regions() -> list[str]:
         ORDER BY region
         """
     )
+    if df.empty or "region" not in df.columns:
+        return []
     return df["region"].dropna().tolist()
 
 
@@ -174,7 +194,32 @@ def map_depts(region: str | None = None) -> list[str]:
         """,
         params,
     )
+    if df.empty or "dept" not in df.columns:
+        return []
     return df["dept"].dropna().astype(str).tolist()
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def map_dept_options(region: str | None = None) -> pd.DataFrame:
+    """Départements (code + nom) pour le filtre, optionnellement filtrés par région."""
+    params: dict = {}
+    where = ""
+    if region:
+        where = "AND region = :region"
+        params["region"] = region
+    df = _read_sql(
+        f"""
+        SELECT DISTINCT dept, dept_name
+        FROM communes
+        WHERE dept IS NOT NULL AND TRIM(dept) <> ''
+          {where}
+        ORDER BY dept
+        """,
+        params,
+    )
+    if df.empty or "dept" not in df.columns:
+        return pd.DataFrame(columns=["dept", "dept_name"])
+    return df
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
@@ -505,8 +550,8 @@ def comparateur_dpe_region() -> pd.DataFrame:
 def nlp_cities() -> list[str]:
     """Liste des villes disponibles dans reviews_clean."""
     try:
-        from lib.connections import get_mongo_db
-        db = get_mongo_db()
+        from lib.connections import get_mongo
+        db = get_mongo()
         cities = db["reviews_clean"].distinct("city_name")
         return sorted([c for c in cities if c])
     except Exception:
@@ -521,8 +566,8 @@ def nlp_reviews(city: str | None = None, limit: int = 500) -> pd.DataFrame:
                positive_text, negative_text, clean_text, review_date, source.
     """
     try:
-        from lib.connections import get_mongo_db
-        db = get_mongo_db()
+        from lib.connections import get_mongo
+        db = get_mongo()
         query: dict = {}
         if city:
             query["city_name"] = {"$regex": city, "$options": "i"}

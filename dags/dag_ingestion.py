@@ -67,7 +67,7 @@ DPE_EXPORT_URL = os.getenv(
     'CASAPEDIA_DPE_EXPORT_URL',
     f'https://data.ademe.fr/data-fair/api/v1/datasets/{DPE_DATASET_ID}/lines?size=10000&format=csv',
 )
-DPE_MAX_PAGES_PER_RUN = int(os.getenv('CASAPEDIA_DPE_MAX_PAGES_PER_RUN', '600'))
+DPE_MAX_PAGES_PER_RUN = int(os.getenv('CASAPEDIA_DPE_MAX_PAGES_PER_RUN', '250'))
 DVF_BASE_URL = os.getenv(
     'CASAPEDIA_DVF_BASE_URL',
     'https://files.data.gouv.fr/geo-dvf/latest/csv',

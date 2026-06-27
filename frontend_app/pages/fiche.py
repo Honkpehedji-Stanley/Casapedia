@@ -9,30 +9,15 @@ import streamlit as st
 
 from lib import formatting as fmt
 from lib import queries
+from lib import theme
 
-PALETTE = [
-    "#2B59C3",
-    "#4C78A8",
-    "#72B7B2",
-    "#54A24B",
-    "#EECA3B",
-    "#F58518",
-    "#E45756",
-    "#B279A2",
-]
+PALETTE = theme.PALETTE
+DPE_COLORS = theme.DPE_COLORS
 
-DPE_COLORS = {
-    "A": "#00A84F",
-    "B": "#51B848",
-    "C": "#B6D234",
-    "D": "#F9E11E",
-    "E": "#F5A10E",
-    "F": "#EF7622",
-    "G": "#E52322",
-}
-
-st.title("Fiche commune")
-st.caption("Indicateurs locaux · marché immobilier, énergie et démographie")
+theme.topbar(
+    "Fiche territoriale",
+    "Indicateurs locaux · marché immobilier, énergie et démographie",
+)
 
 # ── Recherche commune ────────────────────────────────────────────────────────
 search_query = st.text_input(
@@ -148,7 +133,7 @@ with left:
             ),
         )
         fig.update_layout(margin=dict(l=0, r=0, t=10, b=0))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(theme.style_fig(fig), width="stretch")
 
 with right:
     st.subheader("Répartition par type de bien")
@@ -175,7 +160,7 @@ with right:
             margin=dict(l=0, r=0, t=10, b=0),
             showlegend=False,
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(theme.style_fig(fig), width="stretch")
 
 # ── Répartition DPE ──────────────────────────────────────────────────────────
 st.divider()
@@ -211,6 +196,6 @@ else:
         xaxis_title="Classe DPE",
         yaxis_title="Nombre de DPE",
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(theme.style_fig(fig), width="stretch")
 
-st.caption("Source : PostgreSQL `casapedia` · DVF · INSEE · ADEME · pipeline Airflow.")
+theme.footer("Source : PostgreSQL `casapedia` · DVF · INSEE · ADEME · pipeline Airflow.")

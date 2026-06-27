@@ -9,12 +9,20 @@ donc importer `lib.*` directement.
 """
 import streamlit as st
 
+from lib import theme
+
 st.set_page_config(
     page_title="Casapedia",
     page_icon=":material/home:",
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# Identité visuelle commune (maquette) appliquée à toutes les pages.
+theme.inject_css()
+
+with st.sidebar:
+    theme.sidebar_brand()
 
 PAGES = {
     "Exploration": [
@@ -32,3 +40,7 @@ PAGES = {
 }
 
 st.navigation(PAGES).run()
+
+# Carte "Données ouvertes" en bas de la sidebar (après la navigation).
+with st.sidebar:
+    theme.sidebar_footer()

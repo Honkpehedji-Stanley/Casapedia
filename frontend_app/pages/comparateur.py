@@ -9,30 +9,15 @@ import streamlit as st
 
 from lib import formatting as fmt
 from lib import queries
+from lib import theme
 
-PALETTE = [
-    "#2B59C3",
-    "#4C78A8",
-    "#72B7B2",
-    "#54A24B",
-    "#EECA3B",
-    "#F58518",
-    "#E45756",
-    "#B279A2",
-]
+PALETTE = theme.PALETTE
+DPE_COLORS = theme.DPE_COLORS
 
-DPE_COLORS = {
-    "A": "#00A84F",
-    "B": "#51B848",
-    "C": "#B6D234",
-    "D": "#F9E11E",
-    "E": "#F5A10E",
-    "F": "#EF7622",
-    "G": "#E52322",
-}
-
-st.title("Comparateur")
-st.caption("Analyse comparative par région et département")
+theme.topbar(
+    "Comparateur de territoires",
+    "Analyse comparative · prix au m², volumes et performance énergétique",
+)
 
 st.markdown(
     "Comparez les marchés immobiliers de plusieurs territoires sur les mêmes "
@@ -100,7 +85,7 @@ if echelle == "Région":
             yaxis_title=None,
             xaxis_title="Prix médian par m²",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(theme.style_fig(fig), width="stretch")
 
     st.divider()
 
@@ -140,7 +125,7 @@ if echelle == "Région":
             margin=dict(l=0, r=0, t=10, b=0),
             showlegend=False,
         )
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(theme.style_fig(fig2), width="stretch")
 
 # ── Vue départementale ───────────────────────────────────────────────────────
 else:
@@ -189,7 +174,7 @@ else:
             xaxis_title="Prix médian par m²",
             height=max(400, len(df_sorted) * 22),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(theme.style_fig(fig), width="stretch")
 
 # ── DPE régional ─────────────────────────────────────────────────────────────
 st.divider()
@@ -230,6 +215,6 @@ else:
         legend_title="Classe DPE",
         xaxis_tickangle=-35,
     )
-    st.plotly_chart(fig3, use_container_width=True)
+    st.plotly_chart(theme.style_fig(fig3), width="stretch")
 
-st.caption("Source : PostgreSQL `casapedia` · DVF · ADEME · pipeline Airflow.")
+theme.footer("Source : PostgreSQL `casapedia` · DVF · ADEME · pipeline Airflow.")
